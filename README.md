@@ -1,6 +1,6 @@
 # codex-profile-switcher (`cx`)
 
-`cx` は、Codex CLI の実行環境を `CODEX_HOME` で profile ごとに分離する小さなクロスプラットフォーム CLI です。MVP では `plus` と `api` を提供します。
+`cx` は、Codex CLI の実行環境を `CODEX_HOME` で profile ごとに分離する小さなクロスプラットフォーム CLI です。MVP では `chatgpt` と `api` を提供します。
 
 ## Install
 
@@ -69,13 +69,13 @@ WSL は Linux として扱います。
 
 まず Codex CLI が PATH にあることを確認してください。profile ごとの認証は Codex に委譲します。
 
-ChatGPT login:
+ChatGPT account authentication:
 
 ```bash
-cx login plus
+cx login chatgpt
 ```
 
-API key login:
+OpenAI API key authentication:
 
 ```bash
 printenv OPENAI_API_KEY | cx login api
@@ -89,10 +89,12 @@ $env:OPENAI_API_KEY | cx login api
 
 `codex login --with-api-key` は API key を stdin から読むため、`cx login api` を端末から単独で実行せず、上記のように pipe してください。API key の入力、credential の保存、token refresh は Codex CLI が行います。`cx` は key を引数で受け取らず、Codex の `auth.json` を読み書き・解析しません。
 
+ChatGPT account authentication は Free、Go、Plus、Pro などの ChatGPT プランで利用でき、プランによって利用上限が変わります。認証方式の profile はプラン名ではなく認証方式を表すため、プランを変更しても `cx chatgpt` のまま使えます。
+
 ## Launch
 
 ```bash
-cx plus
+cx chatgpt
 cx api
 cx api exec "このPRをレビューして"
 cx api --model gpt-5.6-sol
@@ -103,7 +105,7 @@ Codex arguments は順序を変えずに透過します。
 profile directory はデフォルトで次の場所です。
 
 ```text
-<UserHome>/.codex-profiles/plus
+<UserHome>/.codex-profiles/chatgpt
 <UserHome>/.codex-profiles/api
 ```
 
@@ -118,17 +120,17 @@ CX_HOME=/mnt/d/codex-profiles cx api
 Codex executable は通常 `codex` を PATH から探します。別の executable を使う場合は `CX_CODEX_BIN` を指定します。
 
 ```bash
-CX_CODEX_BIN=/opt/codex/bin/codex cx plus
+CX_CODEX_BIN=/opt/codex/bin/codex cx chatgpt
 ```
 
 確認用コマンド:
 
 ```bash
 cx profiles
-cx path plus
+cx path chatgpt
 cx path api
 cx status
-cx status plus
+cx status chatgpt
 ```
 
 ## Quota estimate

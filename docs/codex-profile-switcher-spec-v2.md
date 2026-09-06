@@ -11,12 +11,14 @@ OpenAI Codex CLI の実行環境をプロファイルごとに分離し、ChatGP
 
 主な用途は以下。
 
-- ChatGPT Plus の Codex 利用枠を使う
+- ChatGPT account authentication の Codex 利用枠を使う（Free、Go、Plus、Pro など）
 - OpenAI API キー認証へ切り替えて API 側の利用枠を使う
 - Data Sharing の complimentary daily tokens を利用する
 - complimentary daily tokens の当日利用状況を CLI から確認しやすくする
 - Windows、WSL、macOS で同じ操作体系を使う
 - 将来的に `local`、`work` など追加プロファイルへ拡張可能にする
+
+認証方式として区別するのは ChatGPT プラン（Free、Go、Plus、Pro など）ではなく、ChatGPT account authentication と OpenAI API key authentication である。ChatGPT プランを変更しても、ChatGPT account authentication の profile 名は変わらない。
 
 ---
 
@@ -128,7 +130,7 @@ README と `cx quota --help` にこの制約を明記する。
 
 ```text
 <UserHome>/.codex-profiles/
-├── plus/
+├── chatgpt/
 │   ├── auth.json
 │   └── config.toml
 └── api/
@@ -143,13 +145,13 @@ credential storage と token refresh は Codex 本体へ委譲する。
 ## 3.2 `cx` は Codex ランチャーとして振る舞う
 
 ```bash
-cx plus
+cx chatgpt
 ```
 
 は概念的に以下と同等。
 
 ```bash
-CODEX_HOME="$HOME/.codex-profiles/plus" codex
+CODEX_HOME="$HOME/.codex-profiles/chatgpt" codex
 ```
 
 ```bash
@@ -173,10 +175,10 @@ cmd.Env = append(os.Environ(), "CODEX_HOME="+profileDir)
 
 ## 3.3 認証処理は Codex 本体へ委譲する
 
-ChatGPT login。
+ChatGPT account authentication。
 
 ```text
-CODEX_HOME=<plus-dir> codex login
+CODEX_HOME=<chatgpt-dir> codex login
 ```
 
 API key login。
@@ -337,8 +339,8 @@ MVP では以下の 2 profile を組み込みで提供する。
 
 | profile | purpose |
 | --- | --- |
-| `plus` | ChatGPT login |
-| `api` | OpenAI API key login |
+| `chatgpt` | ChatGPT account authentication |
+| `api` | OpenAI API key authentication |
 
 将来的に以下へ拡張できる内部設計にする。
 
@@ -371,14 +373,14 @@ Go では `os.UserHomeDir()` を利用する。
 Linux、WSL、macOS。
 
 ```text
-/home/user/.codex-profiles/plus
+/home/user/.codex-profiles/chatgpt
 /home/user/.codex-profiles/api
 ```
 
 Windows。
 
 ```text
-C:\Users\user\.codex-profiles\plus
+C:\Users\user\.codex-profiles\chatgpt
 C:\Users\user\.codex-profiles\api
 ```
 
@@ -424,14 +426,14 @@ CX_CODEX_BIN
 ## 10.1 Codex 起動
 
 ```text
-cx plus [codex args...]
+cx chatgpt [codex args...]
 cx api [codex args...]
 ```
 
 例。
 
 ```bash
-cx plus
+cx chatgpt
 cx api
 cx api exec "このPRをレビューして"
 cx api --model gpt-5.6-sol
@@ -444,16 +446,16 @@ Codex arguments は原則として順序を変えずそのまま透過する。
 ## 10.2 login
 
 ```text
-cx login plus
+cx login chatgpt
 printenv OPENAI_API_KEY | cx login api
 ```
 
-### plus
+### chatgpt
 
 内部実行。
 
 ```text
-CODEX_HOME=<plus-dir> codex login
+CODEX_HOME=<chatgpt-dir> codex login
 ```
 
 ### api
@@ -476,7 +478,7 @@ cx login api --key sk-...
 
 ```bash
 cx status
-cx status plus
+cx status chatgpt
 cx status api
 ```
 
@@ -493,7 +495,7 @@ CODEX_HOME=<profile-dir> codex login status
 ## 10.4 path
 
 ```bash
-cx path plus
+cx path chatgpt
 cx path api
 ```
 
@@ -508,7 +510,7 @@ cx profiles
 MVP 出力。
 
 ```text
-plus
+chatgpt
 api
 ```
 
@@ -1402,7 +1404,7 @@ OS ごとの signal handling を過剰に抽象化しない。
 
 # 30. config.toml
 
-MVP では `plus` と `api` の `config.toml` を自動同期しない。
+MVP では `chatgpt` と `api` の `config.toml` を自動同期しない。
 
 理由。
 
@@ -1534,7 +1536,7 @@ HTTP と計算ロジックを分離する。
 
 - default profile root
 - `CX_HOME`
-- plus path
+- chatgpt path
 - api path
 - invalid profile
 - filepath handling
@@ -1551,7 +1553,7 @@ fake executable を使用する。
 - arguments の透過
 - stdin stdout stderr
 - exit code
-- `login plus`
+- `login chatgpt`
 - `login api --with-api-key`
 
 実 credential をテストで触らない。
@@ -1673,10 +1675,10 @@ release binary。
 
 ## Initial setup
 
-Plus。
+ChatGPT account authentication。
 
 ```bash
-cx login plus
+cx login chatgpt
 ```
 
 API。
@@ -1696,7 +1698,7 @@ API key は stdin から渡し、入力処理と credential 保存は Codex に�
 ## Launch
 
 ```bash
-cx plus
+cx chatgpt
 cx api
 ```
 
@@ -1773,10 +1775,10 @@ MVP 完了条件。
 - `go build ./...` 成功
 - `go test ./...` 成功
 - Windows、Linux、macOS を考慮した path 実装
-- `cx plus` が plus profile の `CODEX_HOME` を使う
+- `cx chatgpt` が chatgpt profile の `CODEX_HOME` を使う
 - `cx api` が api profile の `CODEX_HOME` を使う
-- plus と api の Codex 認証状態が独立する
-- `cx login plus` が Codex login を実行する
+- chatgpt と api の Codex 認証状態が独立する
+- `cx login chatgpt` が Codex login を実行する
 - `cx login api` が `codex login --with-api-key` を実行する
 - `cx login api` が TTY から直接実行された場合に stdin pipe の形式を案内する
 - Codex arguments をそのまま透過できる
@@ -1810,7 +1812,7 @@ MVP 完了条件。
 profile switching。
 
 - profile path
-- `cx plus`
+- `cx chatgpt`
 - `cx api`
 - argument passthrough
 - process exit code
@@ -1925,8 +1927,8 @@ GOOS=darwin GOARCH=arm64 go build ./cmd/cx
 ## 41.1 Codex profile
 
 ```bash
-cx login plus
-cx status plus
+cx login chatgpt
+cx status chatgpt
 
 printenv OPENAI_API_KEY | cx login api
 cx status api

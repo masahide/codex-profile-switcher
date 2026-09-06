@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	Plus Profile = "plus"
-	API  Profile = "api"
+	ChatGPT Profile = "chatgpt"
+	API     Profile = "api"
 )
 
 const defaultRootName = ".codex-profiles"
@@ -19,7 +19,7 @@ type Profile string
 
 var ErrInvalidProfile = errors.New("invalid profile")
 
-var builtins = [...]Profile{Plus, API}
+var builtins = [...]Profile{ChatGPT, API}
 
 // Builtins returns the profiles supported by the MVP in display order.
 func Builtins() []Profile {

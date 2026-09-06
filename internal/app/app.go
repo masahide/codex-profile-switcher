@@ -410,7 +410,7 @@ func (a *App) help() int {
 	const text = `cx - switch isolated Codex CLI profiles
 
 Usage:
-  cx plus [codex args...]
+  cx chatgpt [codex args...]
   cx api [codex args...]
   cx login <profile>
   cx status [profile]
@@ -420,8 +420,8 @@ Usage:
   cx help
 
 Profiles:
-  plus    ChatGPT login environment
-  api     OpenAI API key login environment
+  chatgpt ChatGPT account authentication
+  api     OpenAI API key authentication
 
 API key login:
   printenv OPENAI_API_KEY | cx login api

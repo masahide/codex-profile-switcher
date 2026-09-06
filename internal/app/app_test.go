@@ -88,13 +88,13 @@ func TestRunProfilePassesArguments(t *testing.T) {
 func TestLoginUsesProfileSpecificFlow(t *testing.T) {
 	codexRunner := &fakeCodex{}
 	app := testApp(codexRunner, &fakeUsage{}, new(bytes.Buffer), new(bytes.Buffer))
-	if code := app.Run(context.Background(), []string{"login", "plus"}); code != 0 {
-		t.Fatalf("plus exit code = %d", code)
+	if code := app.Run(context.Background(), []string{"login", "chatgpt"}); code != 0 {
+		t.Fatalf("chatgpt exit code = %d", code)
 	}
 	if code := app.Run(context.Background(), []string{"login", "api"}); code != 0 {
 		t.Fatalf("api exit code = %d", code)
 	}
-	if !reflect.DeepEqual(codexRunner.loginProfiles, []profile.Profile{profile.Plus, profile.API}) {
+	if !reflect.DeepEqual(codexRunner.loginProfiles, []profile.Profile{profile.ChatGPT, profile.API}) {
 		t.Fatalf("login profiles = %v", codexRunner.loginProfiles)
 	}
 }
@@ -111,16 +111,16 @@ func TestAPILoginTTYErrorIncludesPipeInstruction(t *testing.T) {
 }
 
 func TestStatusContinuesAfterOneProfileFails(t *testing.T) {
-	codexRunner := &fakeCodex{statusErrors: map[profile.Profile]error{profile.Plus: errors.New("not logged in")}}
+	codexRunner := &fakeCodex{statusErrors: map[profile.Profile]error{profile.ChatGPT: errors.New("not logged in")}}
 	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
 	app := testApp(codexRunner, &fakeUsage{}, out, errOut)
 	if code := app.Run(context.Background(), []string{"status"}); code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
-	if !reflect.DeepEqual(codexRunner.statusProfiles, []profile.Profile{profile.Plus, profile.API}) {
+	if !reflect.DeepEqual(codexRunner.statusProfiles, []profile.Profile{profile.ChatGPT, profile.API}) {
 		t.Fatalf("status profiles = %v", codexRunner.statusProfiles)
 	}
-	if !strings.Contains(errOut.String(), "plus status failed") {
+	if !strings.Contains(errOut.String(), "chatgpt status failed") {
 		t.Fatalf("stderr = %q", errOut.String())
 	}
 }
@@ -128,17 +128,17 @@ func TestStatusContinuesAfterOneProfileFails(t *testing.T) {
 func TestPathAndProfilesAreScriptFriendly(t *testing.T) {
 	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
 	app := testApp(&fakeCodex{}, &fakeUsage{}, out, errOut)
-	if code := app.Run(context.Background(), []string{"path", "plus"}); code != 0 {
+	if code := app.Run(context.Background(), []string{"path", "chatgpt"}); code != 0 {
 		t.Fatalf("path exit code = %d", code)
 	}
-	if got, want := out.String(), filepath.Join("root", "codex-profiles", "plus")+"\n"; got != want {
+	if got, want := out.String(), filepath.Join("root", "codex-profiles", "chatgpt")+"\n"; got != want {
 		t.Fatalf("path output = %q, want %q", got, want)
 	}
 	out.Reset()
 	if code := app.Run(context.Background(), []string{"profiles"}); code != 0 {
 		t.Fatalf("profiles exit code = %d", code)
 	}
-	if got, want := out.String(), "plus\napi\n"; got != want {
+	if got, want := out.String(), "chatgpt\napi\n"; got != want {
 		t.Fatalf("profiles output = %q, want %q", got, want)
 	}
 }

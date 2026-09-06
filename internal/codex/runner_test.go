@@ -62,7 +62,7 @@ func TestCommandSetsChildHomeAndPassesArguments(t *testing.T) {
 			return filepath.Join(root, string(p)), nil
 		},
 	}
-	cmd, err := runner.command(context.Background(), profile.Plus, []string{"exec", "hello world", "--model", "gpt-test"})
+	cmd, err := runner.command(context.Background(), profile.ChatGPT, []string{"exec", "hello world", "--model", "gpt-test"})
 	if err != nil {
 		t.Fatalf("command returned error: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestCommandSetsChildHomeAndPassesArguments(t *testing.T) {
 			values[key] = val
 		}
 	}
-	wantHome := filepath.Join(root, "plus")
+	wantHome := filepath.Join(root, "chatgpt")
 	if values["CODEX_HOME"] != wantHome {
 		t.Fatalf("child CODEX_HOME = %q, want %q", values["CODEX_HOME"], wantHome)
 	}
@@ -89,12 +89,12 @@ func TestCommandSetsChildHomeAndPassesArguments(t *testing.T) {
 }
 
 func TestLoginArgsAreProfileSpecific(t *testing.T) {
-	plusArgs, err := loginArgs(profile.Plus)
+	chatGPTArgs, err := loginArgs(profile.ChatGPT)
 	if err != nil {
-		t.Fatalf("plus loginArgs returned error: %v", err)
+		t.Fatalf("chatgpt loginArgs returned error: %v", err)
 	}
-	if !equalStrings(plusArgs, []string{"login"}) {
-		t.Fatalf("plus args = %v", plusArgs)
+	if !equalStrings(chatGPTArgs, []string{"login"}) {
+		t.Fatalf("chatgpt args = %v", chatGPTArgs)
 	}
 	apiArgs, err := loginArgs(profile.API)
 	if err != nil {
