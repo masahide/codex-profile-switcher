@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/masahide/codex-profile-switcher/internal/codex"
 	"github.com/masahide/codex-profile-switcher/internal/openaiusage"
 	"github.com/masahide/codex-profile-switcher/internal/profile"
 )
@@ -19,6 +20,7 @@ type fakeCodex struct {
 	runProfiles    []profile.Profile
 	runArgs        [][]string
 	loginProfiles  []profile.Profile
+	loginError     error
 	statusProfiles []profile.Profile
 	statusErrors   map[profile.Profile]error
 }
@@ -31,7 +33,7 @@ func (f *fakeCodex) Run(_ context.Context, p profile.Profile, args []string) err
 
 func (f *fakeCodex) Login(_ context.Context, p profile.Profile) error {
 	f.loginProfiles = append(f.loginProfiles, p)
-	return nil
+	return f.loginError
 }
 
 func (f *fakeCodex) LoginStatus(_ context.Context, p profile.Profile) error {
@@ -94,6 +96,17 @@ func TestLoginUsesProfileSpecificFlow(t *testing.T) {
 	}
 	if !reflect.DeepEqual(codexRunner.loginProfiles, []profile.Profile{profile.Plus, profile.API}) {
 		t.Fatalf("login profiles = %v", codexRunner.loginProfiles)
+	}
+}
+
+func TestAPILoginTTYErrorIncludesPipeInstruction(t *testing.T) {
+	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
+	app := testApp(&fakeCodex{loginError: codex.ErrAPIKeyRequiresStdin}, &fakeUsage{}, out, errOut)
+	if code := app.Run(context.Background(), []string{"login", "api"}); code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if got := errOut.String(); !strings.Contains(got, "cx: API login requires the API key on stdin") || !strings.Contains(got, "printenv OPENAI_API_KEY | cx login api") {
+		t.Fatalf("stderr = %q", got)
 	}
 }
 
@@ -168,15 +181,23 @@ func TestQuotaUsesUTCAndFlagPrecedence(t *testing.T) {
 	}
 }
 
-func TestUsageTierCanBeUnknown(t *testing.T) {
+func TestUsageTierDefaultsToOne(t *testing.T) {
 	usage := &fakeUsage{}
 	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
 	app := testApp(&fakeCodex{}, usage, out, errOut)
 	if code := app.Run(context.Background(), []string{"quota", "--json"}); code != 0 {
 		t.Fatalf("exit code = %d, stderr=%q", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), `"usage_tier":null`) {
+	if !strings.Contains(out.String(), `"usage_tier":1`) {
 		t.Fatalf("JSON = %q", out.String())
+	}
+	var report openaiusage.QuotaReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("JSON unmarshal returned error: %v; output=%q", err, out.String())
+	}
+	large := report.Pools[string(openaiusage.QuotaPoolLarge)]
+	if large.Quota == nil || *large.Quota != 250_000 {
+		t.Fatalf("default Tier 1 quota = %v, want 250000", large.Quota)
 	}
 }
 

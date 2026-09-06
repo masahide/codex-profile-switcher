@@ -138,6 +138,8 @@ README と `cx quota --help` にこの制約を明記する。
 
 credential storage と token refresh は Codex 本体へ委譲する。
 
+`CODEX_HOME` は認証だけでなく Codex の設定・状態全体の root である。そのため `config.toml`、keyring 用の credential key、その他のローカル状態も profile ごとに独立し、既存の `<UserHome>/.codex/config.toml` は自動的には読み込まれない。設定の自動同期は MVP の対象外とする。
+
 ## 3.2 `cx` は Codex ランチャーとして振る舞う
 
 ```bash
@@ -180,7 +182,22 @@ CODEX_HOME=<plus-dir> codex login
 API key login。
 
 ```text
-CODEX_HOME=<api-dir> codex login --with-api-key
+printenv OPENAI_API_KEY | CODEX_HOME=<api-dir> codex login --with-api-key
+```
+
+PowerShell では以下の形式とする。
+
+```powershell
+$env:CODEX_HOME = '<api-dir>'
+$env:OPENAI_API_KEY | codex login --with-api-key
+```
+
+`--with-api-key` は stdin から key を読むため、TTY から直接実行した場合は次の案内を表示して exit code 2 とする。
+
+```text
+cx: API login requires the API key on stdin
+
+  printenv OPENAI_API_KEY | cx login api
 ```
 
 `cx` 自身は Codex credential の内部形式に依存しない。
@@ -428,7 +445,7 @@ Codex arguments は原則として順序を変えずそのまま透過する。
 
 ```text
 cx login plus
-cx login api
+printenv OPENAI_API_KEY | cx login api
 ```
 
 ### plus
@@ -444,7 +461,7 @@ CODEX_HOME=<plus-dir> codex login
 内部実行。
 
 ```text
-CODEX_HOME=<api-dir> codex login --with-api-key
+printenv OPENAI_API_KEY | CODEX_HOME=<api-dir> codex login --with-api-key
 ```
 
 stdin、stdout、stderr は Codex process へ接続する。
@@ -553,7 +570,7 @@ cx quota --project proj_xxx --project proj_yyy
 
 1. 当日 00:00 UTC 以降の OpenAI API token usage を取得する
 2. complimentary token 対象 model group ごとに使用量を集計する
-3. Usage Tier が分かっている場合、公開 quota policy から推定残量を計算する
+3. Usage Tier（未指定時は 1）に応じて公開 quota policy から推定残量を計算する
 4. API で確認できる `service_tier` を diagnostics として表示する
 5. Dashboard で確認すべき公式な確認方法を案内できるようにする
 
@@ -881,7 +898,7 @@ configure those project IDs before relying on the estimate.
 
 1. `--usage-tier`
 2. `CX_OPENAI_USAGE_TIER`
-3. unknown
+3. 既定値 `1`
 
 環境変数。
 
@@ -903,20 +920,7 @@ Tier 1 と Tier 2 は同一 quota。
 
 Tier 3 から Tier 5 は同一 quota。
 
-Tier が不明な場合は token usage を表示するが残量を計算しない。
-
-例。
-
-```text
-Usage Tier: unknown
-
-Large model group
-  eligible traffic: 183,421 tokens
-  quota: unknown
-  estimated remaining: unknown
-
-Set CX_OPENAI_USAGE_TIER or pass --usage-tier.
-```
+未指定の場合でも Tier 1 として quota と estimated remaining を計算する。Tier 1 を推測したのではなく、CLI の既定値として適用する。
 
 Usage Tier を勝手に推測しない。
 
@@ -1149,6 +1153,7 @@ MVP では Dashboard にしか公式に説明されていない表示名を API 
 OpenAI complimentary token estimate
 Window: 2026-09-06 00:00 UTC - 2026-09-06 03:20 UTC
 Usage Tier: 2
+Policy snapshot: 2026-09-06
 Scope: entire organization
 
 Large model group
@@ -1184,18 +1189,19 @@ Large model group
 
 `exhausted` と断定せず、必要に応じて `likely exhausted` と表現する。
 
-## 22.2 Usage Tier 不明
+## 22.2 Usage Tier の既定値
 
 ```text
 OpenAI complimentary token estimate
-Usage Tier: unknown
+Usage Tier: 1
+Policy snapshot: 2026-09-06
 
 Large model group
   eligible traffic: 183,421
-  quota: unknown
-  estimated remaining: unknown
+  quota: 250,000
+  estimated remaining: 66,579
 
-Set CX_OPENAI_USAGE_TIER or use --usage-tier.
+Set CX_OPENAI_USAGE_TIER or use --usage-tier to override the default.
 ```
 
 ---
@@ -1540,6 +1546,7 @@ fake executable を使用する。
 確認事項。
 
 - child process の `CODEX_HOME`
+- credential 環境変数を child process へ継承しない
 - parent environment を変更しない
 - arguments の透過
 - stdin stdout stderr
@@ -1625,7 +1632,7 @@ estimated remaining = 0
 
 ### unknown Usage Tier
 
-traffic は算出するが quota と remaining は null。
+`CalculateEstimate` に nil を渡した場合は traffic を算出するが quota と remaining は null。CLI は nil を渡さず、未指定時は Tier 1 を使う。
 
 ### selected projects
 
@@ -1640,6 +1647,7 @@ traffic は算出するが quota と remaining は null。
 - Codex `auth.json` を解析しない
 - Codex API key を保存しない
 - Admin API key を保存しない
+- Codex child process へ `OPENAI_ADMIN_KEY`、`OPENAI_API_KEY`、`CODEX_API_KEY`、`CODEX_ACCESS_TOKEN` を継承しない
 - secret を CLI args に要求しない
 - secret を stdout に出さない
 - secret を stderr に出さない
@@ -1674,10 +1682,16 @@ cx login plus
 API。
 
 ```bash
-cx login api
+printenv OPENAI_API_KEY | cx login api
 ```
 
-API key の入力処理と credential 保存は Codex に委譲されることを明記する。
+PowerShell。
+
+```powershell
+$env:OPENAI_API_KEY | cx login api
+```
+
+API key は stdin から渡し、入力処理と credential 保存は Codex に委譲されることを明記する。`cx login api` 単独実行は TTY からの入力を拒否して pipe の形式を案内する。
 
 ## Launch
 
@@ -1764,6 +1778,7 @@ MVP 完了条件。
 - plus と api の Codex 認証状態が独立する
 - `cx login plus` が Codex login を実行する
 - `cx login api` が `codex login --with-api-key` を実行する
+- `cx login api` が TTY から直接実行された場合に stdin pipe の形式を案内する
 - Codex arguments をそのまま透過できる
 - `cx status` が profile 別 status を確認する
 - `cx path` が script-friendly output を返す
@@ -1781,6 +1796,7 @@ MVP 完了条件。
 - output が推定値であることを明示する
 - official Dashboard URL を README に記載する
 - Admin API key が output に露出しない
+- Codex child process に credential 環境変数を継承しない
 - `auth.json` を直接操作しない
 - private Dashboard API を使用しない
 - unit test から実 OpenAI API を呼ばない
@@ -1912,7 +1928,7 @@ GOOS=darwin GOARCH=arm64 go build ./cmd/cx
 cx login plus
 cx status plus
 
-cx login api
+printenv OPENAI_API_KEY | cx login api
 cx status api
 ```
 

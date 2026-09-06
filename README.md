@@ -78,10 +78,16 @@ cx login plus
 API key login:
 
 ```bash
-cx login api
+printenv OPENAI_API_KEY | cx login api
 ```
 
-API key の入力、credential の保存、token refresh は Codex CLI が行います。`cx` は key を引数で受け取らず、Codex の `auth.json` を読み書き・解析しません。
+PowerShell:
+
+```powershell
+$env:OPENAI_API_KEY | cx login api
+```
+
+`codex login --with-api-key` は API key を stdin から読むため、`cx login api` を端末から単独で実行せず、上記のように pipe してください。API key の入力、credential の保存、token refresh は Codex CLI が行います。`cx` は key を引数で受け取らず、Codex の `auth.json` を読み書き・解析しません。
 
 ## Launch
 
@@ -100,6 +106,8 @@ profile directory はデフォルトで次の場所です。
 <UserHome>/.codex-profiles/plus
 <UserHome>/.codex-profiles/api
 ```
+
+`cx` は `CODEX_HOME` 全体を分離するため、認証だけでなく `config.toml` や Codex のローカル状態も profile ごとに独立します。既存の `<UserHome>/.codex/config.toml` は自動コピー・同期されません。必要な設定は profile ごとの `config.toml` に別途用意してください。
 
 環境変数で変更できます。
 
@@ -149,7 +157,7 @@ Usage Tier は次の優先順位です。
 
 1. `--usage-tier`
 2. `CX_OPENAI_USAGE_TIER`
-3. unknown（この場合は使用量だけを表示し、quota と estimated remaining は表示しません）
+3. 既定値 `1`
 
 対応する値は `1` から `5` です。Tier 1–2 と Tier 3–5 はそれぞれ同じ quota を共有します。
 
@@ -187,7 +195,9 @@ unknown model は勝手に Large/Small へ分類せず、推定から除外し�
 ## Security boundary
 
 - Codex の `auth.json` を直接操作しません。
+- `config.toml` と Codex のローカル状態を profile 間で共有しません。
 - ChatGPT OAuth token、Codex API key、Admin API key を保存・解析しません。
+- Codex 子プロセスへ `OPENAI_ADMIN_KEY`、`OPENAI_API_KEY`、`CODEX_API_KEY`、`CODEX_ACCESS_TOKEN` を継承しません。
 - `cx quota` は Admin API key を HTTPS の `Authorization: Bearer` header にだけ設定します。
 - Dashboard の private API、HTML scraping、browser automation は使用しません。
 - profile directory は新規作成時に Unix で mode `0700` を指定します。

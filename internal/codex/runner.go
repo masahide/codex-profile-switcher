@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
@@ -22,6 +23,22 @@ type Runner struct {
 
 	// ProfilePath optionally overrides profile.Path for tests or embedding.
 	ProfilePath func(profile.Profile) (string, error)
+
+	// Stdin overrides the input passed to Codex. A nil value uses os.Stdin.
+	// API-key login requires this stream to be non-interactive.
+	Stdin io.Reader
+}
+
+// ErrAPIKeyRequiresStdin reports that API-key login was attempted with a
+// terminal as stdin. Codex's --with-api-key mode reads the key from stdin and
+// expects callers to pipe it explicitly.
+var ErrAPIKeyRequiresStdin = errors.New("API login requires the API key on stdin")
+
+var blockedCredentialEnvKeys = [...]string{
+	"OPENAI_ADMIN_KEY",
+	"OPENAI_API_KEY",
+	"CODEX_API_KEY",
+	"CODEX_ACCESS_TOKEN",
 }
 
 // Run launches Codex with args passed in their original order.
@@ -39,6 +56,9 @@ func (r *Runner) Login(ctx context.Context, p profile.Profile) error {
 	args, err := loginArgs(p)
 	if err != nil {
 		return err
+	}
+	if p == profile.API && stdinIsTerminal(r.stdin()) {
+		return ErrAPIKeyRequiresStdin
 	}
 	return r.Run(ctx, p, args)
 }
@@ -82,10 +102,26 @@ func (r *Runner) command(ctx context.Context, p profile.Profile, args []string) 
 
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Env = withCodexHome(os.Environ(), profileDir)
-	cmd.Stdin = os.Stdin
+	cmd.Stdin = r.stdin()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd, nil
+}
+
+func (r *Runner) stdin() io.Reader {
+	if r.Stdin != nil {
+		return r.Stdin
+	}
+	return os.Stdin
+}
+
+func stdinIsTerminal(reader io.Reader) bool {
+	file, ok := reader.(*os.File)
+	if !ok || file == nil {
+		return false
+	}
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func (r *Runner) binary() (string, error) {
@@ -106,12 +142,21 @@ func withCodexHome(environ []string, profileDir string) []string {
 	result := make([]string, 0, len(environ)+1)
 	for _, entry := range environ {
 		key, _, ok := strings.Cut(entry, "=")
-		if ok && sameEnvKey(key, "CODEX_HOME") {
+		if ok && (sameEnvKey(key, "CODEX_HOME") || isBlockedCredentialEnvKey(key)) {
 			continue
 		}
 		result = append(result, entry)
 	}
 	return append(result, "CODEX_HOME="+profileDir)
+}
+
+func isBlockedCredentialEnvKey(key string) bool {
+	for _, blocked := range blockedCredentialEnvKeys {
+		if sameEnvKey(key, blocked) {
+			return true
+		}
+	}
+	return false
 }
 
 func sameEnvKey(left, right string) bool {

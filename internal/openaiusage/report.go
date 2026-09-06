@@ -30,6 +30,11 @@ func FormatText(w io.Writer, report QuotaReport, verbose bool) error {
 	} else if _, err := fmt.Fprintf(w, "Usage Tier: %d\n", *report.UsageTier); err != nil {
 		return err
 	}
+	if report.Details.PolicySnapshotDate != "" {
+		if _, err := fmt.Fprintf(w, "Policy snapshot: %s\n", report.Details.PolicySnapshotDate); err != nil {
+			return err
+		}
+	}
 	if verbose && report.Details.UsageTierSource != "" {
 		if _, err := fmt.Fprintf(w, "Usage Tier source: %s\n", report.Details.UsageTierSource); err != nil {
 			return err
@@ -145,9 +150,6 @@ func formatPool(w io.Writer, report QuotaReport, pool QuotaPool) error {
 }
 
 func formatDetails(w io.Writer, report QuotaReport) error {
-	if _, err := fmt.Fprintf(w, "Policy snapshot: %s\n", report.Details.PolicySnapshotDate); err != nil {
-		return err
-	}
 	if report.Details.PolicySource != "" {
 		if _, err := fmt.Fprintf(w, "Policy source: %s\n", report.Details.PolicySource); err != nil {
 			return err
