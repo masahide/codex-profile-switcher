@@ -126,7 +126,7 @@ cx status
 
 ## Quota estimate
 
-`cx quota` は当日の Organization Usage API の completions usage を取得し、公開されている complimentary-token policy snapshot と Usage Tier から推定値を計算します。
+`cx quota` は当日の Organization Usage API の completions usage を取得し、公開されている complimentary-token policy snapshot と Usage Tier から推定値を計算します。あわせて Organization Costs API から当日の実課金額を表示します。
 
 ```bash
 export OPENAI_ADMIN_KEY="<your-admin-api-key>"
@@ -184,6 +184,9 @@ For authoritative verification of complimentary token usage, use the OpenAI Usag
 推定値は Dashboard と一致しない場合があります。Data Sharing の設定、project scope、Usage API の集計遅延、policy や model naming の変更、quota をまたぐ request の扱いによって差が生じます。quota を超える request は一部だけでなく request 全体が通常課金になる可能性があるため、`estimated remaining` は次の request が無料になる保証ではありません。
 
 unknown model は勝手に Large/Small へ分類せず、推定から除外します。`service_tier` の raw value は diagnostics として扱い、未文書化の literal を complimentary usage の判定根拠にはしません。
+policy snapshot に含まれない model は `Not covered by current complimentary-token policy` として通常表示しますが、quota pool には加算しません。対象 model の追加直後など、policy snapshot が現状に追いついていない可能性を確認しやすくするための表示です。
+
+Costs API の値は当日 00:00 UTC 以降の実課金額です。complimentary tokens は Costs には課金として現れないため、token の `estimated remaining` と billed cost は別の値です。Costs API が利用できない場合も、quota estimate は warning とともに表示します。
 
 ## Security boundary
 
@@ -191,7 +194,7 @@ unknown model は勝手に Large/Small へ分類せず、推定から除外し�
 - `CODEX_HOME` を変更せず、`config.toml` と Codex のローカル状態を認証方式間で共有します。
 - ChatGPT OAuth token、Codex API key、Admin API key を `cx` が保存・解析しません。
 - API login の key は `CX_OPENAI_API_KEY` から読み取り、Codex の stdin にだけ渡します。Codex 子プロセスへ `OPENAI_ADMIN_KEY`、`OPENAI_API_KEY`、`CX_OPENAI_API_KEY`、`CODEX_API_KEY`、`CODEX_ACCESS_TOKEN` を継承しません。
-- `cx quota` は Admin API key を HTTPS の `Authorization: Bearer` header にだけ設定します。
+- `cx quota` は Usage API と Costs API の両方に同じ Admin API key を HTTPS の `Authorization: Bearer` header でだけ設定します。
 - Dashboard の private API、HTML scraping、browser automation は使用しません。
 - `logout` 後の login に失敗しても、`cx` は以前の credential を保持していないため自動復元を試みません。
 
@@ -227,4 +230,5 @@ git push origin v0.1.0
 
 - [Data Sharing and complimentary daily tokens](https://help.openai.com/en/articles/10306912)
 - [Organization Usage API: completions](https://developers.openai.com/api/reference/ruby/resources/admin/subresources/organization/subresources/usage/methods/completions)
+- [Organization Costs API](https://developers.openai.com/api/reference/python/resources/admin/subresources/organization/subresources/usage)
 - [Admin API keys](https://developers.openai.com/api/reference/python/resources/admin/subresources/organization/subresources/admin_api_keys)

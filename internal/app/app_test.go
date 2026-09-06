@@ -53,14 +53,22 @@ func (f *fakeCodex) Logout(context.Context) error {
 }
 
 type fakeUsage struct {
-	query   openaiusage.UsageQuery
-	results []openaiusage.CompletionUsageResult
-	err     error
+	query     openaiusage.UsageQuery
+	results   []openaiusage.CompletionUsageResult
+	err       error
+	costQuery openaiusage.CostsQuery
+	costs     []openaiusage.CostResult
+	costErr   error
 }
 
 func (f *fakeUsage) CompletionUsage(_ context.Context, query openaiusage.UsageQuery) ([]openaiusage.CompletionUsageResult, error) {
 	f.query = query
 	return f.results, f.err
+}
+
+func (f *fakeUsage) Costs(_ context.Context, query openaiusage.CostsQuery) ([]openaiusage.CostResult, error) {
+	f.costQuery = query
+	return f.costs, f.costErr
 }
 
 func testApp(codexRunner *fakeCodex, usage *fakeUsage, out, errOut *bytes.Buffer) *App {
@@ -270,6 +278,37 @@ func TestUsageTierDefaultsToOne(t *testing.T) {
 	large := report.Pools[string(openaiusage.QuotaPoolLarge)]
 	if large.Quota == nil || *large.Quota != 250_000 {
 		t.Fatalf("default Tier 1 quota = %v, want 250000", large.Quota)
+	}
+}
+
+func TestQuotaShowsBilledCostAndKeepsEstimateWhenCostsFail(t *testing.T) {
+	usage := &fakeUsage{
+		results: []openaiusage.CompletionUsageResult{{Model: "gpt-5.6-sol", InputTokens: 100, OutputTokens: 50}},
+		costs:   []openaiusage.CostResult{{Amount: openaiusage.CostAmount{Value: 0.60, Currency: "usd"}, LineItem: "Input tokens"}, {Amount: openaiusage.CostAmount{Value: 0.50, Currency: "usd"}, LineItem: "Output tokens"}},
+	}
+	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
+	app := testApp(&fakeCodex{current: profile.API}, usage, out, errOut)
+	if code := app.Run(context.Background(), []string{"quota", "--verbose"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr=%q", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "Billed cost today") || !strings.Contains(out.String(), "total: $1.10") {
+		t.Fatalf("output = %q", out.String())
+	}
+	if !strings.Contains(out.String(), "Input tokens") || !strings.Contains(out.String(), "Output tokens") {
+		t.Fatalf("verbose cost line items missing: %q", out.String())
+	}
+	if !reflect.DeepEqual(usage.costQuery, usage.query) {
+		t.Fatalf("cost query = %+v, usage query = %+v", usage.costQuery, usage.query)
+	}
+
+	usage.costErr = errors.New("costs unavailable")
+	out.Reset()
+	errOut.Reset()
+	if code := app.Run(context.Background(), []string{"quota"}); code != 0 {
+		t.Fatalf("cost failure exit code = %d, stderr=%q", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "Large model group") || !strings.Contains(out.String(), "Billed cost today is unavailable: costs unavailable") {
+		t.Fatalf("estimate/warning output = %q", out.String())
 	}
 }
 

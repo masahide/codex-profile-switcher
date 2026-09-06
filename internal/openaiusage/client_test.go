@@ -100,6 +100,155 @@ func TestCompletionUsageRequestAndNestedResponse(t *testing.T) {
 	}
 }
 
+func TestCostsRequestAndNestedResponse(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != CostsEndpointPath {
+			t.Errorf("path = %q, want %q", r.URL.Path, CostsEndpointPath)
+		}
+		if got, want := r.Header.Get("Authorization"), "Bearer admin-key-used-only-in-test"; got != want {
+			t.Errorf("Authorization = %q, want %q", got, want)
+		}
+		query := r.URL.Query()
+		if got, want := query.Get("start_time"), "1788652800"; got != want {
+			t.Errorf("start_time = %q, want %q", got, want)
+		}
+		if got, want := query.Get("end_time"), "1788664800"; got != want {
+			t.Errorf("end_time = %q, want %q", got, want)
+		}
+		if got, want := query.Get("bucket_width"), "1d"; got != want {
+			t.Errorf("bucket_width = %q, want %q", got, want)
+		}
+		if got, want := query["group_by"], []string{"line_item"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("group_by = %v, want %v", got, want)
+		}
+		if got, want := query["project_ids"], []string{"proj_aaa", "proj_bbb"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("project_ids = %v, want %v", got, want)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+  "object": "page",
+  "data": [{
+    "object": "bucket",
+    "start_time": 1788652800,
+    "end_time": 1788664800,
+    "results": [{
+      "object": "organization.costs.result",
+      "amount": {"value": 0.60, "currency": "usd"},
+      "line_item": "Input tokens",
+      "project_id": null
+    }, {
+      "object": "organization.costs.result",
+      "amount": {"value": 0.50, "currency": "usd"},
+      "line_item": "Output tokens",
+      "project_id": "proj_aaa"
+    }]
+  }],
+  "has_more": false,
+  "next_page": null
+}`))
+	}))
+	defer server.Close()
+
+	results, err := testClient(server).Costs(context.Background(), testQuery())
+	if err != nil {
+		t.Fatalf("Costs returned error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("result count = %d, want 2", len(results))
+	}
+	if results[0].Amount.Value != 0.60 || results[0].Amount.Currency != "usd" || results[0].LineItem != "Input tokens" {
+		t.Fatalf("unexpected first cost result: %+v", results[0])
+	}
+	if results[0].ProjectID != "" {
+		t.Fatalf("null project ID = %q, want empty", results[0].ProjectID)
+	}
+}
+
+func TestCostsPagination(t *testing.T) {
+	var pages []string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page")
+		pages = append(pages, page)
+		w.Header().Set("Content-Type", "application/json")
+		if page == "" {
+			_, _ = w.Write([]byte(`{"data":[{"results":[{"amount":{"value":0.10,"currency":"usd"},"line_item":"Input tokens"}]}],"has_more":true,"next_page":"cursor-A"}`))
+			return
+		}
+		if page != "cursor-A" {
+			t.Errorf("unexpected page cursor %q", page)
+		}
+		_, _ = w.Write([]byte(`{"data":[{"results":[{"amount":{"value":0.20,"currency":"usd"},"line_item":"Output tokens"}]}],"has_more":false}`))
+	}))
+	defer server.Close()
+
+	results, err := testClient(server).Costs(context.Background(), testQuery())
+	if err != nil {
+		t.Fatalf("Costs returned error: %v", err)
+	}
+	if !reflect.DeepEqual(pages, []string{"", "cursor-A"}) {
+		t.Fatalf("pages = %v", pages)
+	}
+	if len(results) != 2 || results[1].Amount.Value != 0.20 {
+		t.Fatalf("results = %+v", results)
+	}
+}
+
+func TestCostsHTTPStatusErrorsAreSafe(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		status    int
+		want      string
+		requestID string
+	}{
+		{name: "unauthorized", status: http.StatusUnauthorized, want: "authentication failed"},
+		{name: "forbidden", status: http.StatusForbidden, want: "does not have permission"},
+		{name: "rate limit", status: http.StatusTooManyRequests, want: "rate limit exceeded"},
+		{name: "server", status: http.StatusBadGateway, want: "temporarily unavailable"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("x-request-id", "cost_req_safe_123")
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte("cost server body must not be exposed"))
+			}))
+			defer server.Close()
+
+			_, err := testClient(server).Costs(context.Background(), testQuery())
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+			if !strings.Contains(err.Error(), "cost_req_safe_123") {
+				t.Fatalf("error = %v, want request ID", err)
+			}
+			if strings.Contains(err.Error(), "cost server body") || strings.Contains(err.Error(), "admin-key-used-only-in-test") {
+				t.Fatalf("unsafe content appeared in error: %v", err)
+			}
+		})
+	}
+}
+
+func TestCostsMissingAdminKeyDoesNotRequest(t *testing.T) {
+	var requestCount atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+	}))
+	defer server.Close()
+	t.Setenv(AdminAPIKeyEnvironment, "")
+
+	client := testClient(server)
+	client.AdminKey = nil
+	_, err := client.Costs(context.Background(), testQuery())
+	if !errors.Is(err, ErrAdminKeyRequired) {
+		t.Fatalf("error = %v, want ErrAdminKeyRequired", err)
+	}
+	if requestCount.Load() != 0 {
+		t.Fatalf("request count = %d, want 0", requestCount.Load())
+	}
+	if strings.Contains(err.Error(), "admin-key-used-only-in-test") {
+		t.Fatal("admin key appeared in error")
+	}
+}
+
 func TestCompletionUsagePagination(t *testing.T) {
 	var pages []string
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

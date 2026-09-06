@@ -18,10 +18,12 @@ func CalculateEstimate(results []CompletionUsageResult, policy ComplimentaryPoli
 		OfficialVerificationURL: OfficialDashboardURL,
 		Warnings:                make([]string, 0),
 		Details: ReportDetails{
-			ModelTraffic:       make(map[string]int64),
-			EligibleModels:     make(map[string][]string),
-			ServiceTierTraffic: make(map[string]int64),
-			UnclassifiedModels: make([]string, 0),
+			ModelTraffic:           make(map[string]int64),
+			EligibleModels:         make(map[string][]string),
+			ServiceTierTraffic:     make(map[string]int64),
+			NotCoveredModels:       make([]string, 0),
+			NotCoveredModelTraffic: make(map[string]int64),
+			UnclassifiedModels:     make([]string, 0),
 		},
 	}
 
@@ -39,26 +41,28 @@ func CalculateEstimate(results []CompletionUsageResult, policy ComplimentaryPoli
 		QuotaPoolLarge: make(map[string]struct{}),
 		QuotaPoolSmall: make(map[string]struct{}),
 	}
-	unclassified := make(map[string]struct{})
-
 	for _, result := range results {
 		tokens := addTokenCounts(result.InputTokens, result.OutputTokens)
-		report.Details.ModelTraffic[displayModel(result.Model)] = addTokenCounts(report.Details.ModelTraffic[displayModel(result.Model)], tokens)
+		model := displayModel(result.Model)
+		report.Details.ModelTraffic[model] = addTokenCounts(report.Details.ModelTraffic[model], tokens)
 		tier := displayServiceTier(result.ServiceTier)
 		report.Details.ServiceTierTraffic[tier] = addTokenCounts(report.Details.ServiceTierTraffic[tier], tokens)
 
 		pool, ok := ClassifyModel(result.Model)
 		if !ok {
-			unclassified[displayModel(result.Model)] = struct{}{}
+			report.Details.NotCoveredModelTraffic[model] = addTokenCounts(report.Details.NotCoveredModelTraffic[model], tokens)
 			continue
 		}
 		traffic[pool] = addTokenCounts(traffic[pool], tokens)
 		modelSets[pool][result.Model] = struct{}{}
 	}
 
-	for _, model := range sortedSet(unclassified) {
+	for model := range report.Details.NotCoveredModelTraffic {
+		report.Details.NotCoveredModels = append(report.Details.NotCoveredModels, model)
 		report.Details.UnclassifiedModels = append(report.Details.UnclassifiedModels, model)
 	}
+	sort.Strings(report.Details.NotCoveredModels)
+	sort.Strings(report.Details.UnclassifiedModels)
 	for _, pool := range []QuotaPool{QuotaPoolLarge, QuotaPoolSmall} {
 		models := make([]string, 0, len(modelSets[pool]))
 		for model := range modelSets[pool] {

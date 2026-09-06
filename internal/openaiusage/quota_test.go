@@ -97,6 +97,32 @@ func TestCalculateEstimateOverQuotaAndUnknownServiceTier(t *testing.T) {
 	}
 }
 
+func TestCalculateEstimateShowsPolicyNotCoveredTrafficWithoutAddingItToQuota(t *testing.T) {
+	tier := 2
+	report := CalculateEstimate([]CompletionUsageResult{
+		result("gpt-6-astra", "default", 500_000, 0, 49_278),
+		result("gpt-5.6-sol", "default", 100, 0, 50),
+	}, DefaultPolicy(), &tier)
+
+	if _, ok := ClassifyModel("gpt-6-astra"); ok {
+		t.Fatal("gpt-6-astra was added to the complimentary-token policy")
+	}
+	large := report.Pools[string(QuotaPoolLarge)]
+	if large.EligibleTraffic != 150 {
+		t.Fatalf("large traffic = %d, want 150", large.EligibleTraffic)
+	}
+	small := report.Pools[string(QuotaPoolSmall)]
+	if small.EligibleTraffic != 0 {
+		t.Fatalf("small traffic = %d, want 0", small.EligibleTraffic)
+	}
+	if got := report.Details.NotCoveredModelTraffic["gpt-6-astra"]; got != 549_278 {
+		t.Fatalf("not-covered traffic = %d, want 549278", got)
+	}
+	if !reflect.DeepEqual(report.Details.NotCoveredModels, []string{"gpt-6-astra"}) {
+		t.Fatalf("not-covered models = %v", report.Details.NotCoveredModels)
+	}
+}
+
 func TestCalculateEstimateUnknownUsageTierStillReportsTraffic(t *testing.T) {
 	report := CalculateEstimate([]CompletionUsageResult{
 		result("gpt-5.6-sol", "default", 100, 0, 83),
