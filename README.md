@@ -4,7 +4,43 @@
 
 ## Install
 
-Go が利用できる環境では、次のコマンドでインストールできます。
+リリース済みの最新バイナリを取得するワンライナーを用意しています。インストーラーは実行環境に対応するアーカイブを選び、`checksums.txt` で検証してからユーザー領域へインストールします。root／Administrator 権限は要求しません。
+
+macOS、Linux、WSL:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/masahide/codex-profile-switcher/main/install.sh | bash
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/masahide/codex-profile-switcher/main/install.ps1 | iex
+```
+
+Windows CMD:
+
+```cmd
+curl -fsSL https://raw.githubusercontent.com/masahide/codex-profile-switcher/main/install.cmd -o install.cmd && install.cmd && del install.cmd
+```
+
+Unix 系ではデフォルトで `~/.local/bin/cx`、Windows では `%LOCALAPPDATA%\cx\cx.exe` にインストールします。PATH にない場合は、Unix 系ではシェルの起動ファイル、Windows ではユーザー PATH に追加します。PATH の反映には新しいターミナルを開いてください。
+
+バージョンを固定する場合は、次のように指定できます。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/masahide/codex-profile-switcher/main/install.sh | bash -s -- v0.1.0
+```
+
+PowerShell／CMD では `CX_VERSION` 環境変数を設定します。
+
+```powershell
+$env:CX_VERSION = 'v0.1.0'; irm https://raw.githubusercontent.com/masahide/codex-profile-switcher/main/install.ps1 | iex
+```
+
+インストール先やPATH更新を変更する場合は、`CX_INSTALL_DIR`、`CX_NO_PATH_UPDATE=1` を利用できます。
+
+Go が利用できる環境では、次のコマンドでもインストールできます。
 
 ```bash
 go install github.com/masahide/codex-profile-switcher/cmd/cx@latest
