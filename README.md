@@ -169,6 +169,21 @@ go build ./...
 
 テストは fake executable と `httptest` を使い、実 Codex login や実 OpenAI API を呼びません。
 
+## Releases
+
+`v` で始まるタグを push、またはそのタグの GitHub Release を publish すると、GitHub Actions がテストと vet を実行し、次の 6 ターゲットをビルドします。
+
+- Windows amd64 / arm64
+- Linux amd64 / arm64
+- macOS amd64 / arm64
+
+Windows は zip、Linux/macOS は tar.gz として公開され、`checksums.txt` も添付されます。対象タグの GitHub Release が存在すれば asset を更新し、存在しなければ Release を自動作成します。
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 ## References
 
 - [Data Sharing and complimentary daily tokens](https://help.openai.com/en/articles/10306912)
