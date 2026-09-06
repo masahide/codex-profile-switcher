@@ -5,40 +5,51 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/masahide/codex-profile-switcher/internal/codex"
+	"github.com/masahide/codex-profile-switcher/internal/auth"
 	"github.com/masahide/codex-profile-switcher/internal/openaiusage"
 	"github.com/masahide/codex-profile-switcher/internal/profile"
 )
 
 type fakeCodex struct {
-	runProfiles    []profile.Profile
-	runArgs        [][]string
-	loginProfiles  []profile.Profile
-	loginError     error
-	statusProfiles []profile.Profile
-	statusErrors   map[profile.Profile]error
+	current    profile.AuthMode
+	currentErr error
+	events     []string
+	runArgs    [][]string
+	apiKey     string
+	loginErr   error
+	logoutErr  error
 }
 
-func (f *fakeCodex) Run(_ context.Context, p profile.Profile, args []string) error {
-	f.runProfiles = append(f.runProfiles, p)
+func (f *fakeCodex) Run(_ context.Context, args []string) error {
+	f.events = append(f.events, "run")
 	f.runArgs = append(f.runArgs, append([]string(nil), args...))
 	return nil
 }
 
-func (f *fakeCodex) Login(_ context.Context, p profile.Profile) error {
-	f.loginProfiles = append(f.loginProfiles, p)
-	return f.loginError
+func (f *fakeCodex) CurrentMode(context.Context) (profile.AuthMode, error) {
+	f.events = append(f.events, "status")
+	return f.current, f.currentErr
 }
 
-func (f *fakeCodex) LoginStatus(_ context.Context, p profile.Profile) error {
-	f.statusProfiles = append(f.statusProfiles, p)
-	return f.statusErrors[p]
+func (f *fakeCodex) LoginChatGPT(context.Context) error {
+	f.events = append(f.events, "login-chatgpt")
+	return f.loginErr
+}
+
+func (f *fakeCodex) LoginAPI(_ context.Context, apiKey string) error {
+	f.events = append(f.events, "login-api")
+	f.apiKey = apiKey
+	return f.loginErr
+}
+
+func (f *fakeCodex) Logout(context.Context) error {
+	f.events = append(f.events, "logout")
+	return f.logoutErr
 }
 
 type fakeUsage struct {
@@ -54,99 +65,160 @@ func (f *fakeUsage) CompletionUsage(_ context.Context, query openaiusage.UsageQu
 
 func testApp(codexRunner *fakeCodex, usage *fakeUsage, out, errOut *bytes.Buffer) *App {
 	return &App{
-		Codex:       codexRunner,
-		Usage:       usage,
-		Out:         out,
-		ErrOut:      errOut,
-		ProfileRoot: func() (string, error) { return filepath.Join("root", "codex-profiles"), nil },
-		Now:         func() time.Time { return time.Date(2026, 9, 6, 12, 20, 0, 0, time.FixedZone("JST", 9*60*60)) },
-		Env: func(key string) string {
-			if key == openaiusage.UsageTierEnvironment {
-				return ""
-			}
+		Codex:  codexRunner,
+		Auth:   codexRunner,
+		Usage:  usage,
+		Out:    out,
+		ErrOut: errOut,
+		Now:    func() time.Time { return time.Date(2026, 9, 6, 12, 20, 0, 0, time.FixedZone("JST", 9*60*60)) },
+		Env: func(string) string {
 			return ""
 		},
 		Policy: openaiusage.DefaultPolicy(),
 	}
 }
 
-func TestRunProfilePassesArguments(t *testing.T) {
-	codexRunner := &fakeCodex{}
+func TestRunAuthModePassesArguments(t *testing.T) {
+	codexRunner := &fakeCodex{current: profile.API}
 	app := testApp(codexRunner, &fakeUsage{}, new(bytes.Buffer), new(bytes.Buffer))
 	args := []string{"exec", "hello world", "--model", "gpt-5.6-sol"}
 	if code := app.Run(context.Background(), append([]string{"api"}, args...)); code != 0 {
 		t.Fatalf("exit code = %d", code)
 	}
-	if !reflect.DeepEqual(codexRunner.runProfiles, []profile.Profile{profile.API}) {
-		t.Fatalf("profiles = %v", codexRunner.runProfiles)
+	if !reflect.DeepEqual(codexRunner.events, []string{"status", "run"}) {
+		t.Fatalf("events = %v", codexRunner.events)
 	}
 	if !reflect.DeepEqual(codexRunner.runArgs, [][]string{args}) {
 		t.Fatalf("args = %v, want %v", codexRunner.runArgs, args)
 	}
 }
 
-func TestLoginUsesProfileSpecificFlow(t *testing.T) {
-	codexRunner := &fakeCodex{}
-	app := testApp(codexRunner, &fakeUsage{}, new(bytes.Buffer), new(bytes.Buffer))
-	if code := app.Run(context.Background(), []string{"login", "chatgpt"}); code != 0 {
-		t.Fatalf("chatgpt exit code = %d", code)
+func TestRunAuthModeSwitchScenarios(t *testing.T) {
+	tests := []struct {
+		name       string
+		current    profile.AuthMode
+		target     string
+		apiKey     string
+		wantEvents []string
+		wantKey    string
+	}{
+		{name: "chatgpt already active", current: profile.ChatGPT, target: "chatgpt", wantEvents: []string{"status", "run"}},
+		{name: "api already active", current: profile.API, target: "api", wantEvents: []string{"status", "run"}},
+		{name: "chatgpt to api", current: profile.ChatGPT, target: "api", apiKey: "dummy-api-key", wantEvents: []string{"status", "logout", "login-api", "run"}, wantKey: "dummy-api-key"},
+		{name: "api to chatgpt", current: profile.API, target: "chatgpt", wantEvents: []string{"status", "logout", "login-chatgpt", "run"}},
+		{name: "none to chatgpt", current: profile.None, target: "chatgpt", wantEvents: []string{"status", "login-chatgpt", "run"}},
+		{name: "none to api", current: profile.None, target: "api", apiKey: "dummy-api-key", wantEvents: []string{"status", "login-api", "run"}, wantKey: "dummy-api-key"},
 	}
-	if code := app.Run(context.Background(), []string{"login", "api"}); code != 0 {
-		t.Fatalf("api exit code = %d", code)
-	}
-	if !reflect.DeepEqual(codexRunner.loginProfiles, []profile.Profile{profile.ChatGPT, profile.API}) {
-		t.Fatalf("login profiles = %v", codexRunner.loginProfiles)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			codexRunner := &fakeCodex{current: test.current}
+			out, errOut := new(bytes.Buffer), new(bytes.Buffer)
+			app := testApp(codexRunner, &fakeUsage{}, out, errOut)
+			app.Env = func(key string) string {
+				if key == auth.APIKeyEnvironment {
+					return test.apiKey
+				}
+				return ""
+			}
+			if code := app.Run(context.Background(), []string{test.target}); code != 0 {
+				t.Fatalf("exit code = %d, stderr=%q", code, errOut.String())
+			}
+			if !reflect.DeepEqual(codexRunner.events, test.wantEvents) {
+				t.Fatalf("events = %v, want %v", codexRunner.events, test.wantEvents)
+			}
+			if codexRunner.apiKey != test.wantKey {
+				t.Fatalf("API key = %q, want %q", codexRunner.apiKey, test.wantKey)
+			}
+		})
 	}
 }
 
-func TestAPILoginTTYErrorIncludesPipeInstruction(t *testing.T) {
-	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
-	app := testApp(&fakeCodex{loginError: codex.ErrAPIKeyRequiresStdin}, &fakeUsage{}, out, errOut)
-	if code := app.Run(context.Background(), []string{"login", "api"}); code != 2 {
-		t.Fatalf("exit code = %d, want 2", code)
-	}
-	if got := errOut.String(); !strings.Contains(got, "cx: API login requires the API key on stdin") || !strings.Contains(got, "printenv OPENAI_API_KEY | cx login api") {
-		t.Fatalf("stderr = %q", got)
-	}
-}
-
-func TestStatusContinuesAfterOneProfileFails(t *testing.T) {
-	codexRunner := &fakeCodex{statusErrors: map[profile.Profile]error{profile.ChatGPT: errors.New("not logged in")}}
+func TestRunAPIWithoutKeyDoesNotLogout(t *testing.T) {
+	codexRunner := &fakeCodex{current: profile.ChatGPT}
 	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
 	app := testApp(codexRunner, &fakeUsage{}, out, errOut)
-	if code := app.Run(context.Background(), []string{"status"}); code != 1 {
+	if code := app.Run(context.Background(), []string{"api"}); code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
-	if !reflect.DeepEqual(codexRunner.statusProfiles, []profile.Profile{profile.ChatGPT, profile.API}) {
-		t.Fatalf("status profiles = %v", codexRunner.statusProfiles)
+	if !reflect.DeepEqual(codexRunner.events, []string{"status"}) {
+		t.Fatalf("events = %v, want status only", codexRunner.events)
 	}
-	if !strings.Contains(errOut.String(), "chatgpt status failed") {
+	if !strings.Contains(errOut.String(), "CX_OPENAI_API_KEY is required") {
 		t.Fatalf("stderr = %q", errOut.String())
 	}
 }
 
-func TestPathAndProfilesAreScriptFriendly(t *testing.T) {
+func TestRunUnknownAuthModeDoesNotStartCodex(t *testing.T) {
+	codexRunner := &fakeCodex{current: profile.Unknown}
 	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
-	app := testApp(&fakeCodex{}, &fakeUsage{}, out, errOut)
-	if code := app.Run(context.Background(), []string{"path", "chatgpt"}); code != 0 {
-		t.Fatalf("path exit code = %d", code)
+	app := testApp(codexRunner, &fakeUsage{}, out, errOut)
+	if code := app.Run(context.Background(), []string{"chatgpt"}); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
 	}
-	if got, want := out.String(), filepath.Join("root", "codex-profiles", "chatgpt")+"\n"; got != want {
-		t.Fatalf("path output = %q, want %q", got, want)
+	if !reflect.DeepEqual(codexRunner.events, []string{"status"}) {
+		t.Fatalf("events = %v, want status only", codexRunner.events)
 	}
-	out.Reset()
-	if code := app.Run(context.Background(), []string{"profiles"}); code != 0 {
-		t.Fatalf("profiles exit code = %d", code)
+	if !strings.Contains(errOut.String(), "unable to determine current Codex authentication mode") || !strings.Contains(errOut.String(), "codex login status") {
+		t.Fatalf("stderr = %q", errOut.String())
 	}
-	if got, want := out.String(), "chatgpt\napi\n"; got != want {
-		t.Fatalf("profiles output = %q, want %q", got, want)
+}
+
+func TestRunLoginFailureAfterLogoutDoesNotStartCodex(t *testing.T) {
+	codexRunner := &fakeCodex{current: profile.ChatGPT, loginErr: errors.New("login failed")}
+	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
+	app := testApp(codexRunner, &fakeUsage{}, out, errOut)
+	app.Env = func(key string) string {
+		if key == auth.APIKeyEnvironment {
+			return "dummy-api-key"
+		}
+		return ""
+	}
+	if code := app.Run(context.Background(), []string{"api"}); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !reflect.DeepEqual(codexRunner.events, []string{"status", "logout", "login-api"}) {
+		t.Fatalf("events = %v", codexRunner.events)
+	}
+	if !strings.Contains(errOut.String(), "failed after logout") || strings.Contains(errOut.String(), "dummy-api-key") {
+		t.Fatalf("stderr = %q", errOut.String())
+	}
+}
+
+func TestStatusPrintsNormalizedAuthenticationMode(t *testing.T) {
+	tests := []struct {
+		mode profile.AuthMode
+		want string
+	}{
+		{mode: profile.ChatGPT, want: "Authentication: ChatGPT\n"},
+		{mode: profile.API, want: "Authentication: OpenAI API key\n"},
+		{mode: profile.None, want: "Authentication: not logged in\n"},
+	}
+	for _, test := range tests {
+		t.Run(string(test.mode), func(t *testing.T) {
+			out, errOut := new(bytes.Buffer), new(bytes.Buffer)
+			app := testApp(&fakeCodex{current: test.mode}, &fakeUsage{}, out, errOut)
+			if code := app.Run(context.Background(), []string{"status"}); code != 0 {
+				t.Fatalf("exit code = %d, stderr=%q", code, errOut.String())
+			}
+			if out.String() != test.want {
+				t.Fatalf("output = %q, want %q", out.String(), test.want)
+			}
+		})
+	}
+}
+
+func TestStatusRejectsModeArgument(t *testing.T) {
+	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
+	app := testApp(&fakeCodex{current: profile.API}, &fakeUsage{}, out, errOut)
+	if code := app.Run(context.Background(), []string{"status", "api"}); code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
 	}
 }
 
 func TestQuotaUsesUTCAndFlagPrecedence(t *testing.T) {
 	usage := &fakeUsage{results: []openaiusage.CompletionUsageResult{{Model: "gpt-5.6-sol", InputTokens: 100, OutputTokens: 50}}}
 	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
-	app := testApp(&fakeCodex{}, usage, out, errOut)
+	app := testApp(&fakeCodex{current: profile.API}, usage, out, errOut)
 	app.Env = func(key string) string {
 		switch key {
 		case openaiusage.UsageTierEnvironment:
@@ -184,7 +256,7 @@ func TestQuotaUsesUTCAndFlagPrecedence(t *testing.T) {
 func TestUsageTierDefaultsToOne(t *testing.T) {
 	usage := &fakeUsage{}
 	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
-	app := testApp(&fakeCodex{}, usage, out, errOut)
+	app := testApp(&fakeCodex{current: profile.API}, usage, out, errOut)
 	if code := app.Run(context.Background(), []string{"quota", "--json"}); code != 0 {
 		t.Fatalf("exit code = %d, stderr=%q", code, errOut.String())
 	}
@@ -203,7 +275,7 @@ func TestUsageTierDefaultsToOne(t *testing.T) {
 
 func TestInvalidCommandReturnsUsageCode(t *testing.T) {
 	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
-	app := testApp(&fakeCodex{}, &fakeUsage{}, out, errOut)
+	app := testApp(&fakeCodex{current: profile.API}, &fakeUsage{}, out, errOut)
 	if code := app.Run(context.Background(), []string{"unknown"}); code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}

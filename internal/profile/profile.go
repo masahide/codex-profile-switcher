@@ -1,105 +1,60 @@
-// Package profile contains the small amount of profile path policy owned by cx.
+// Package profile defines the authentication modes supported by cx.
 package profile
 
-import (
-	"errors"
-	"os"
-	"path/filepath"
-)
+import "errors"
+
+// AuthMode is the authentication mode reported by Codex.
+type AuthMode string
 
 const (
-	ChatGPT Profile = "chatgpt"
-	API     Profile = "api"
+	AuthModeChatGPT AuthMode = "chatgpt"
+	AuthModeAPI     AuthMode = "api"
+	AuthModeNone    AuthMode = "none"
+	AuthModeUnknown AuthMode = "unknown"
+
+	ChatGPT = AuthModeChatGPT
+	API     = AuthModeAPI
+	None    = AuthModeNone
+	Unknown = AuthModeUnknown
 )
 
-const defaultRootName = ".codex-profiles"
+var ErrInvalidAuthMode = errors.New("invalid authentication mode")
 
-// Profile is one of the built-in Codex environments.
-type Profile string
+var builtins = [...]AuthMode{ChatGPT, API}
 
-var ErrInvalidProfile = errors.New("invalid profile")
-
-var builtins = [...]Profile{ChatGPT, API}
-
-// Builtins returns the profiles supported by the MVP in display order.
-func Builtins() []Profile {
-	profiles := make([]Profile, len(builtins))
-	copy(profiles, builtins[:])
-	return profiles
+// Builtins returns the target authentication modes supported by cx.
+func Builtins() []AuthMode {
+	modes := make([]AuthMode, len(builtins))
+	copy(modes, builtins[:])
+	return modes
 }
 
-// Parse validates a profile name without consulting the filesystem.
-func Parse(name string) (Profile, error) {
-	profile := Profile(name)
-	if !IsValid(profile) {
-		return "", ErrInvalidProfile
+// Parse validates a target authentication mode without consulting Codex
+// state.
+func Parse(name string) (AuthMode, error) {
+	mode := AuthMode(name)
+	if !IsValid(mode) {
+		return "", ErrInvalidAuthMode
 	}
-	return profile, nil
+	return mode, nil
 }
 
-// IsValid reports whether p is one of the built-in profiles.
-func IsValid(p Profile) bool {
+// IsValid reports whether mode can be requested as a target mode.
+func IsValid(mode AuthMode) bool {
 	for _, candidate := range builtins {
-		if p == candidate {
+		if mode == candidate {
 			return true
 		}
 	}
 	return false
 }
 
-// Root returns the profile root. CX_HOME takes precedence over the user's
-// home directory when it is set to a non-empty value.
-func Root() (string, error) {
-	if cxHome := os.Getenv("CX_HOME"); cxHome != "" {
-		return RootFrom("", cxHome)
+// IsKnown reports whether mode is a recognized result from Codex.
+func IsKnown(mode AuthMode) bool {
+	switch mode {
+	case ChatGPT, API, None:
+		return true
+	default:
+		return false
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return RootFrom(home, "")
-}
-
-// RootFrom is the testable form of Root.
-func RootFrom(homeDir, cxHome string) (string, error) {
-	if cxHome != "" {
-		return filepath.Clean(cxHome), nil
-	}
-	if homeDir == "" {
-		return "", errors.New("user home directory is empty")
-	}
-	return filepath.Join(homeDir, defaultRootName), nil
-}
-
-// Path returns the CODEX_HOME directory for p.
-func Path(p Profile) (string, error) {
-	root, err := Root()
-	if err != nil {
-		return "", err
-	}
-	return PathFromRoot(root, p)
-}
-
-// PathFromRoot returns the CODEX_HOME directory for p below root.
-func PathFromRoot(root string, p Profile) (string, error) {
-	if !IsValid(p) {
-		return "", ErrInvalidProfile
-	}
-	if root == "" {
-		return "", errors.New("profile root is empty")
-	}
-	return filepath.Join(root, string(p)), nil
-}
-
-// Ensure creates the profile directory with restrictive permissions on Unix.
-// Existing permissions are left untouched; Codex owns the files inside it.
-func Ensure(p Profile) (string, error) {
-	directory, err := Path(p)
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return "", err
-	}
-	return directory, nil
 }
