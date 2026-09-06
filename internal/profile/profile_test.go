@@ -47,7 +47,7 @@ func TestPathForProfiles(t *testing.T) {
 		p    Profile
 		want string
 	}{
-		{name: "plus", p: Plus, want: filepath.Join(root, "plus")},
+		{name: "chatgpt", p: ChatGPT, want: filepath.Join(root, "chatgpt")},
 		{name: "api", p: API, want: filepath.Join(root, "api")},
 	} {
 		t.Run(test.name, func(t *testing.T) {

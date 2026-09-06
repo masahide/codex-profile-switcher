@@ -110,6 +110,10 @@ func (a *App) runLogin(ctx context.Context, args []string) int {
 		return 1
 	}
 	if err := a.Codex.Login(ctx, p); err != nil {
+		if errors.Is(err, codex.ErrAPIKeyRequiresStdin) {
+			a.errorf("API login requires the API key on stdin\n\n  printenv OPENAI_API_KEY | cx login api")
+			return 2
+		}
 		a.errorf("Codex login failed: %v", err)
 		return 1
 	}
@@ -203,6 +207,8 @@ type quotaOptions struct {
 	ProjectsSet  bool
 }
 
+const defaultUsageTier = 1
+
 func (a *App) runQuota(ctx context.Context, args []string) int {
 	options, showHelp, err := parseQuotaOptions(args)
 	if err != nil {
@@ -276,7 +282,8 @@ func (a *App) resolveUsageTier(options quotaOptions) (*int, string, error) {
 	}
 	envValue := a.env(openaiusage.UsageTierEnvironment)
 	if envValue == "" {
-		return nil, "unknown", nil
+		defaultTier := defaultUsageTier
+		return &defaultTier, "default", nil
 	}
 	tier, err := parseUsageTier(envValue)
 	if err != nil {
@@ -403,7 +410,7 @@ func (a *App) help() int {
 	const text = `cx - switch isolated Codex CLI profiles
 
 Usage:
-  cx plus [codex args...]
+  cx chatgpt [codex args...]
   cx api [codex args...]
   cx login <profile>
   cx status [profile]
@@ -413,11 +420,16 @@ Usage:
   cx help
 
 Profiles:
-  plus    ChatGPT login environment
-  api     OpenAI API key login environment
+  chatgpt ChatGPT account authentication
+  api     OpenAI API key authentication
+
+API key login:
+  printenv OPENAI_API_KEY | cx login api
+  PowerShell: $env:OPENAI_API_KEY | cx login api
 
 The Codex CLI owns authentication and credential storage. cx only sets
-CODEX_HOME for the child process; it never reads or edits auth.json.
+CODEX_HOME for the child process; config.toml and local Codex state are also
+profile-specific. cx never reads or edits auth.json.
 
 Use "cx quota --help" for the complimentary-token estimate options.
 `
@@ -438,7 +450,7 @@ the authoritative place to verify complimentary usage.
 Options:
   --verbose                 show model, service-tier, scope, and policy details
   --json                    write machine-readable JSON only
-  --usage-tier <1-5>        override CX_OPENAI_USAGE_TIER
+  --usage-tier <1-5>        override CX_OPENAI_USAGE_TIER (default: 1)
   --project <project-id>    restrict the query; may be repeated
 
 Environment:

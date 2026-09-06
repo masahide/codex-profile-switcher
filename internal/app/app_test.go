@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/masahide/codex-profile-switcher/internal/codex"
 	"github.com/masahide/codex-profile-switcher/internal/openaiusage"
 	"github.com/masahide/codex-profile-switcher/internal/profile"
 )
@@ -19,6 +20,7 @@ type fakeCodex struct {
 	runProfiles    []profile.Profile
 	runArgs        [][]string
 	loginProfiles  []profile.Profile
+	loginError     error
 	statusProfiles []profile.Profile
 	statusErrors   map[profile.Profile]error
 }
@@ -31,7 +33,7 @@ func (f *fakeCodex) Run(_ context.Context, p profile.Profile, args []string) err
 
 func (f *fakeCodex) Login(_ context.Context, p profile.Profile) error {
 	f.loginProfiles = append(f.loginProfiles, p)
-	return nil
+	return f.loginError
 }
 
 func (f *fakeCodex) LoginStatus(_ context.Context, p profile.Profile) error {
@@ -86,28 +88,39 @@ func TestRunProfilePassesArguments(t *testing.T) {
 func TestLoginUsesProfileSpecificFlow(t *testing.T) {
 	codexRunner := &fakeCodex{}
 	app := testApp(codexRunner, &fakeUsage{}, new(bytes.Buffer), new(bytes.Buffer))
-	if code := app.Run(context.Background(), []string{"login", "plus"}); code != 0 {
-		t.Fatalf("plus exit code = %d", code)
+	if code := app.Run(context.Background(), []string{"login", "chatgpt"}); code != 0 {
+		t.Fatalf("chatgpt exit code = %d", code)
 	}
 	if code := app.Run(context.Background(), []string{"login", "api"}); code != 0 {
 		t.Fatalf("api exit code = %d", code)
 	}
-	if !reflect.DeepEqual(codexRunner.loginProfiles, []profile.Profile{profile.Plus, profile.API}) {
+	if !reflect.DeepEqual(codexRunner.loginProfiles, []profile.Profile{profile.ChatGPT, profile.API}) {
 		t.Fatalf("login profiles = %v", codexRunner.loginProfiles)
 	}
 }
 
+func TestAPILoginTTYErrorIncludesPipeInstruction(t *testing.T) {
+	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
+	app := testApp(&fakeCodex{loginError: codex.ErrAPIKeyRequiresStdin}, &fakeUsage{}, out, errOut)
+	if code := app.Run(context.Background(), []string{"login", "api"}); code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if got := errOut.String(); !strings.Contains(got, "cx: API login requires the API key on stdin") || !strings.Contains(got, "printenv OPENAI_API_KEY | cx login api") {
+		t.Fatalf("stderr = %q", got)
+	}
+}
+
 func TestStatusContinuesAfterOneProfileFails(t *testing.T) {
-	codexRunner := &fakeCodex{statusErrors: map[profile.Profile]error{profile.Plus: errors.New("not logged in")}}
+	codexRunner := &fakeCodex{statusErrors: map[profile.Profile]error{profile.ChatGPT: errors.New("not logged in")}}
 	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
 	app := testApp(codexRunner, &fakeUsage{}, out, errOut)
 	if code := app.Run(context.Background(), []string{"status"}); code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
-	if !reflect.DeepEqual(codexRunner.statusProfiles, []profile.Profile{profile.Plus, profile.API}) {
+	if !reflect.DeepEqual(codexRunner.statusProfiles, []profile.Profile{profile.ChatGPT, profile.API}) {
 		t.Fatalf("status profiles = %v", codexRunner.statusProfiles)
 	}
-	if !strings.Contains(errOut.String(), "plus status failed") {
+	if !strings.Contains(errOut.String(), "chatgpt status failed") {
 		t.Fatalf("stderr = %q", errOut.String())
 	}
 }
@@ -115,17 +128,17 @@ func TestStatusContinuesAfterOneProfileFails(t *testing.T) {
 func TestPathAndProfilesAreScriptFriendly(t *testing.T) {
 	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
 	app := testApp(&fakeCodex{}, &fakeUsage{}, out, errOut)
-	if code := app.Run(context.Background(), []string{"path", "plus"}); code != 0 {
+	if code := app.Run(context.Background(), []string{"path", "chatgpt"}); code != 0 {
 		t.Fatalf("path exit code = %d", code)
 	}
-	if got, want := out.String(), filepath.Join("root", "codex-profiles", "plus")+"\n"; got != want {
+	if got, want := out.String(), filepath.Join("root", "codex-profiles", "chatgpt")+"\n"; got != want {
 		t.Fatalf("path output = %q, want %q", got, want)
 	}
 	out.Reset()
 	if code := app.Run(context.Background(), []string{"profiles"}); code != 0 {
 		t.Fatalf("profiles exit code = %d", code)
 	}
-	if got, want := out.String(), "plus\napi\n"; got != want {
+	if got, want := out.String(), "chatgpt\napi\n"; got != want {
 		t.Fatalf("profiles output = %q, want %q", got, want)
 	}
 }
@@ -168,15 +181,23 @@ func TestQuotaUsesUTCAndFlagPrecedence(t *testing.T) {
 	}
 }
 
-func TestUsageTierCanBeUnknown(t *testing.T) {
+func TestUsageTierDefaultsToOne(t *testing.T) {
 	usage := &fakeUsage{}
 	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
 	app := testApp(&fakeCodex{}, usage, out, errOut)
 	if code := app.Run(context.Background(), []string{"quota", "--json"}); code != 0 {
 		t.Fatalf("exit code = %d, stderr=%q", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), `"usage_tier":null`) {
+	if !strings.Contains(out.String(), `"usage_tier":1`) {
 		t.Fatalf("JSON = %q", out.String())
+	}
+	var report openaiusage.QuotaReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("JSON unmarshal returned error: %v; output=%q", err, out.String())
+	}
+	large := report.Pools[string(openaiusage.QuotaPoolLarge)]
+	if large.Quota == nil || *large.Quota != 250_000 {
+		t.Fatalf("default Tier 1 quota = %v, want 250000", large.Quota)
 	}
 }
 

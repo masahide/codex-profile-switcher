@@ -11,12 +11,14 @@ OpenAI Codex CLI の実行環境をプロファイルごとに分離し、ChatGP
 
 主な用途は以下。
 
-- ChatGPT Plus の Codex 利用枠を使う
+- ChatGPT account authentication の Codex 利用枠を使う（Free、Go、Plus、Pro など）
 - OpenAI API キー認証へ切り替えて API 側の利用枠を使う
 - Data Sharing の complimentary daily tokens を利用する
 - complimentary daily tokens の当日利用状況を CLI から確認しやすくする
 - Windows、WSL、macOS で同じ操作体系を使う
 - 将来的に `local`、`work` など追加プロファイルへ拡張可能にする
+
+認証方式として区別するのは ChatGPT プラン（Free、Go、Plus、Pro など）ではなく、ChatGPT account authentication と OpenAI API key authentication である。ChatGPT プランを変更しても、ChatGPT account authentication の profile 名は変わらない。
 
 ---
 
@@ -128,7 +130,7 @@ README と `cx quota --help` にこの制約を明記する。
 
 ```text
 <UserHome>/.codex-profiles/
-├── plus/
+├── chatgpt/
 │   ├── auth.json
 │   └── config.toml
 └── api/
@@ -138,16 +140,18 @@ README と `cx quota --help` にこの制約を明記する。
 
 credential storage と token refresh は Codex 本体へ委譲する。
 
+`CODEX_HOME` は認証だけでなく Codex の設定・状態全体の root である。そのため `config.toml`、keyring 用の credential key、その他のローカル状態も profile ごとに独立し、既存の `<UserHome>/.codex/config.toml` は自動的には読み込まれない。設定の自動同期は MVP の対象外とする。
+
 ## 3.2 `cx` は Codex ランチャーとして振る舞う
 
 ```bash
-cx plus
+cx chatgpt
 ```
 
 は概念的に以下と同等。
 
 ```bash
-CODEX_HOME="$HOME/.codex-profiles/plus" codex
+CODEX_HOME="$HOME/.codex-profiles/chatgpt" codex
 ```
 
 ```bash
@@ -171,16 +175,31 @@ cmd.Env = append(os.Environ(), "CODEX_HOME="+profileDir)
 
 ## 3.3 認証処理は Codex 本体へ委譲する
 
-ChatGPT login。
+ChatGPT account authentication。
 
 ```text
-CODEX_HOME=<plus-dir> codex login
+CODEX_HOME=<chatgpt-dir> codex login
 ```
 
 API key login。
 
 ```text
-CODEX_HOME=<api-dir> codex login --with-api-key
+printenv OPENAI_API_KEY | CODEX_HOME=<api-dir> codex login --with-api-key
+```
+
+PowerShell では以下の形式とする。
+
+```powershell
+$env:CODEX_HOME = '<api-dir>'
+$env:OPENAI_API_KEY | codex login --with-api-key
+```
+
+`--with-api-key` は stdin から key を読むため、TTY から直接実行した場合は次の案内を表示して exit code 2 とする。
+
+```text
+cx: API login requires the API key on stdin
+
+  printenv OPENAI_API_KEY | cx login api
 ```
 
 `cx` 自身は Codex credential の内部形式に依存しない。
@@ -320,8 +339,8 @@ MVP では以下の 2 profile を組み込みで提供する。
 
 | profile | purpose |
 | --- | --- |
-| `plus` | ChatGPT login |
-| `api` | OpenAI API key login |
+| `chatgpt` | ChatGPT account authentication |
+| `api` | OpenAI API key authentication |
 
 将来的に以下へ拡張できる内部設計にする。
 
@@ -354,14 +373,14 @@ Go では `os.UserHomeDir()` を利用する。
 Linux、WSL、macOS。
 
 ```text
-/home/user/.codex-profiles/plus
+/home/user/.codex-profiles/chatgpt
 /home/user/.codex-profiles/api
 ```
 
 Windows。
 
 ```text
-C:\Users\user\.codex-profiles\plus
+C:\Users\user\.codex-profiles\chatgpt
 C:\Users\user\.codex-profiles\api
 ```
 
@@ -407,14 +426,14 @@ CX_CODEX_BIN
 ## 10.1 Codex 起動
 
 ```text
-cx plus [codex args...]
+cx chatgpt [codex args...]
 cx api [codex args...]
 ```
 
 例。
 
 ```bash
-cx plus
+cx chatgpt
 cx api
 cx api exec "このPRをレビューして"
 cx api --model gpt-5.6-sol
@@ -427,16 +446,16 @@ Codex arguments は原則として順序を変えずそのまま透過する。
 ## 10.2 login
 
 ```text
-cx login plus
-cx login api
+cx login chatgpt
+printenv OPENAI_API_KEY | cx login api
 ```
 
-### plus
+### chatgpt
 
 内部実行。
 
 ```text
-CODEX_HOME=<plus-dir> codex login
+CODEX_HOME=<chatgpt-dir> codex login
 ```
 
 ### api
@@ -444,7 +463,7 @@ CODEX_HOME=<plus-dir> codex login
 内部実行。
 
 ```text
-CODEX_HOME=<api-dir> codex login --with-api-key
+printenv OPENAI_API_KEY | CODEX_HOME=<api-dir> codex login --with-api-key
 ```
 
 stdin、stdout、stderr は Codex process へ接続する。
@@ -459,7 +478,7 @@ cx login api --key sk-...
 
 ```bash
 cx status
-cx status plus
+cx status chatgpt
 cx status api
 ```
 
@@ -476,7 +495,7 @@ CODEX_HOME=<profile-dir> codex login status
 ## 10.4 path
 
 ```bash
-cx path plus
+cx path chatgpt
 cx path api
 ```
 
@@ -491,7 +510,7 @@ cx profiles
 MVP 出力。
 
 ```text
-plus
+chatgpt
 api
 ```
 
@@ -553,7 +572,7 @@ cx quota --project proj_xxx --project proj_yyy
 
 1. 当日 00:00 UTC 以降の OpenAI API token usage を取得する
 2. complimentary token 対象 model group ごとに使用量を集計する
-3. Usage Tier が分かっている場合、公開 quota policy から推定残量を計算する
+3. Usage Tier（未指定時は 1）に応じて公開 quota policy から推定残量を計算する
 4. API で確認できる `service_tier` を diagnostics として表示する
 5. Dashboard で確認すべき公式な確認方法を案内できるようにする
 
@@ -881,7 +900,7 @@ configure those project IDs before relying on the estimate.
 
 1. `--usage-tier`
 2. `CX_OPENAI_USAGE_TIER`
-3. unknown
+3. 既定値 `1`
 
 環境変数。
 
@@ -903,20 +922,7 @@ Tier 1 と Tier 2 は同一 quota。
 
 Tier 3 から Tier 5 は同一 quota。
 
-Tier が不明な場合は token usage を表示するが残量を計算しない。
-
-例。
-
-```text
-Usage Tier: unknown
-
-Large model group
-  eligible traffic: 183,421 tokens
-  quota: unknown
-  estimated remaining: unknown
-
-Set CX_OPENAI_USAGE_TIER or pass --usage-tier.
-```
+未指定の場合でも Tier 1 として quota と estimated remaining を計算する。Tier 1 を推測したのではなく、CLI の既定値として適用する。
 
 Usage Tier を勝手に推測しない。
 
@@ -1149,6 +1155,7 @@ MVP では Dashboard にしか公式に説明されていない表示名を API 
 OpenAI complimentary token estimate
 Window: 2026-09-06 00:00 UTC - 2026-09-06 03:20 UTC
 Usage Tier: 2
+Policy snapshot: 2026-09-06
 Scope: entire organization
 
 Large model group
@@ -1184,18 +1191,19 @@ Large model group
 
 `exhausted` と断定せず、必要に応じて `likely exhausted` と表現する。
 
-## 22.2 Usage Tier 不明
+## 22.2 Usage Tier の既定値
 
 ```text
 OpenAI complimentary token estimate
-Usage Tier: unknown
+Usage Tier: 1
+Policy snapshot: 2026-09-06
 
 Large model group
   eligible traffic: 183,421
-  quota: unknown
-  estimated remaining: unknown
+  quota: 250,000
+  estimated remaining: 66,579
 
-Set CX_OPENAI_USAGE_TIER or use --usage-tier.
+Set CX_OPENAI_USAGE_TIER or use --usage-tier to override the default.
 ```
 
 ---
@@ -1396,7 +1404,7 @@ OS ごとの signal handling を過剰に抽象化しない。
 
 # 30. config.toml
 
-MVP では `plus` と `api` の `config.toml` を自動同期しない。
+MVP では `chatgpt` と `api` の `config.toml` を自動同期しない。
 
 理由。
 
@@ -1528,7 +1536,7 @@ HTTP と計算ロジックを分離する。
 
 - default profile root
 - `CX_HOME`
-- plus path
+- chatgpt path
 - api path
 - invalid profile
 - filepath handling
@@ -1540,11 +1548,12 @@ fake executable を使用する。
 確認事項。
 
 - child process の `CODEX_HOME`
+- credential 環境変数を child process へ継承しない
 - parent environment を変更しない
 - arguments の透過
 - stdin stdout stderr
 - exit code
-- `login plus`
+- `login chatgpt`
 - `login api --with-api-key`
 
 実 credential をテストで触らない。
@@ -1625,7 +1634,7 @@ estimated remaining = 0
 
 ### unknown Usage Tier
 
-traffic は算出するが quota と remaining は null。
+`CalculateEstimate` に nil を渡した場合は traffic を算出するが quota と remaining は null。CLI は nil を渡さず、未指定時は Tier 1 を使う。
 
 ### selected projects
 
@@ -1640,6 +1649,7 @@ traffic は算出するが quota と remaining は null。
 - Codex `auth.json` を解析しない
 - Codex API key を保存しない
 - Admin API key を保存しない
+- Codex child process へ `OPENAI_ADMIN_KEY`、`OPENAI_API_KEY`、`CODEX_API_KEY`、`CODEX_ACCESS_TOKEN` を継承しない
 - secret を CLI args に要求しない
 - secret を stdout に出さない
 - secret を stderr に出さない
@@ -1665,24 +1675,30 @@ release binary。
 
 ## Initial setup
 
-Plus。
+ChatGPT account authentication。
 
 ```bash
-cx login plus
+cx login chatgpt
 ```
 
 API。
 
 ```bash
-cx login api
+printenv OPENAI_API_KEY | cx login api
 ```
 
-API key の入力処理と credential 保存は Codex に委譲されることを明記する。
+PowerShell。
+
+```powershell
+$env:OPENAI_API_KEY | cx login api
+```
+
+API key は stdin から渡し、入力処理と credential 保存は Codex に委譲されることを明記する。`cx login api` 単独実行は TTY からの入力を拒否して pipe の形式を案内する。
 
 ## Launch
 
 ```bash
-cx plus
+cx chatgpt
 cx api
 ```
 
@@ -1759,11 +1775,12 @@ MVP 完了条件。
 - `go build ./...` 成功
 - `go test ./...` 成功
 - Windows、Linux、macOS を考慮した path 実装
-- `cx plus` が plus profile の `CODEX_HOME` を使う
+- `cx chatgpt` が chatgpt profile の `CODEX_HOME` を使う
 - `cx api` が api profile の `CODEX_HOME` を使う
-- plus と api の Codex 認証状態が独立する
-- `cx login plus` が Codex login を実行する
+- chatgpt と api の Codex 認証状態が独立する
+- `cx login chatgpt` が Codex login を実行する
 - `cx login api` が `codex login --with-api-key` を実行する
+- `cx login api` が TTY から直接実行された場合に stdin pipe の形式を案内する
 - Codex arguments をそのまま透過できる
 - `cx status` が profile 別 status を確認する
 - `cx path` が script-friendly output を返す
@@ -1781,6 +1798,7 @@ MVP 完了条件。
 - output が推定値であることを明示する
 - official Dashboard URL を README に記載する
 - Admin API key が output に露出しない
+- Codex child process に credential 環境変数を継承しない
 - `auth.json` を直接操作しない
 - private Dashboard API を使用しない
 - unit test から実 OpenAI API を呼ばない
@@ -1794,7 +1812,7 @@ MVP 完了条件。
 profile switching。
 
 - profile path
-- `cx plus`
+- `cx chatgpt`
 - `cx api`
 - argument passthrough
 - process exit code
@@ -1909,10 +1927,10 @@ GOOS=darwin GOARCH=arm64 go build ./cmd/cx
 ## 41.1 Codex profile
 
 ```bash
-cx login plus
-cx status plus
+cx login chatgpt
+cx status chatgpt
 
-cx login api
+printenv OPENAI_API_KEY | cx login api
 cx status api
 ```
 
