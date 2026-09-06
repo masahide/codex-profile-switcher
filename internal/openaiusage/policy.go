@@ -42,6 +42,14 @@ var smallModels = []string{
 	"codex-mini-latest",
 }
 
+// gpt-6-astra was observed in the Usage API with service_tier
+// "incentivized-tier" on 2026-09-06. The Help Center has not been updated
+// with this model mapping yet, so keep it as temporary observed data rather
+// than adding it to the published model allowlist above.
+var observedModelPools = map[string]QuotaPool{
+	"gpt-6-astra": QuotaPoolLarge,
+}
+
 var modelPools = buildModelPools()
 
 // DefaultPolicy returns the versioned policy used by cx quota.
@@ -64,11 +72,33 @@ func DefaultPolicy() ComplimentaryPolicy {
 	}
 }
 
-// ClassifyModel classifies only models explicitly listed by the policy.
-// Unknown and fine-tuned model names intentionally return false.
+// ClassifyModel returns the static published model-group mapping. This is
+// used only to select a quota pool; a model is free-eligible only when its
+// Usage API result also has the incentivized service tier.
 func ClassifyModel(model string) (QuotaPool, bool) {
 	p, ok := modelPools[model]
 	return p, ok
+}
+
+// classifyModelForEstimate returns the model-group mapping used after the
+// service-tier eligibility check. Policy model lists take precedence for
+// callers with a custom policy, followed by the temporary observed mapping.
+func classifyModelForEstimate(model string, policy ComplimentaryPolicy) (QuotaPool, bool) {
+	for _, pool := range []QuotaPool{QuotaPoolLarge, QuotaPoolSmall} {
+		poolPolicy, ok := policy.Pools[pool]
+		if !ok {
+			continue
+		}
+		for _, candidate := range poolPolicy.Models {
+			if candidate == model {
+				return pool, true
+			}
+		}
+	}
+	if pool, ok := observedModelPools[model]; ok {
+		return pool, true
+	}
+	return ClassifyModel(model)
 }
 
 // Limit returns the quota for a valid Usage Tier. Tiers 1-2 and 3-5 share

@@ -27,6 +27,10 @@ type UsageClient interface {
 	CompletionUsage(context.Context, openaiusage.UsageQuery) ([]openaiusage.CompletionUsageResult, error)
 }
 
+type CostsClient interface {
+	Costs(context.Context, openaiusage.CostsQuery) ([]openaiusage.CostResult, error)
+}
+
 // App is the testable command handler for cx.
 type App struct {
 	Codex  CodexRunner
@@ -227,6 +231,15 @@ func (a *App) runQuota(ctx context.Context, args []string) int {
 		report.Scope.ProjectIDs = make([]string, 0)
 	}
 	report.Details.UsageTierSource = usageTierSource
+	if costsClient, ok := a.Usage.(CostsClient); ok {
+		costResults, costErr := costsClient.Costs(ctx, query)
+		if costErr != nil {
+			report.Warnings = append(report.Warnings, "Billed cost today is unavailable: "+costErr.Error())
+		} else {
+			costSummary := openaiusage.SummarizeCosts(costResults)
+			report.BilledCostToday = &costSummary
+		}
+	}
 
 	if options.JSON {
 		if err := json.NewEncoder(a.stdout()).Encode(report); err != nil {
@@ -407,12 +420,15 @@ Use "cx quota --help" for the complimentary-token estimate options.
 func (a *App) quotaHelp() int {
 	const text = `Usage: cx quota [options]
 
-Estimate today's complimentary-token traffic using the OpenAI Organization
-Usage API. This is not an official balance API; the OpenAI Usage Dashboard is
-the authoritative place to verify complimentary usage.
+Estimate today's complimentary-token traffic from OpenAI Organization Usage
+API results whose service_tier is exactly "incentivized-tier", and show
+today's actual billed cost from the supplementary Costs API. The token value
+is not an official balance API; the OpenAI Usage Dashboard is the authoritative
+place to verify complimentary usage. Default and other service tiers are not
+included in complimentary used.
 
 Options:
-  --verbose                 show model, service-tier, scope, and policy details
+  --verbose                 show model, service-tier, scope, policy, and cost line-item details
   --json                    write machine-readable JSON only
   --usage-tier <1-5>        override CX_OPENAI_USAGE_TIER (default: 1)
   --project <project-id>    restrict the query; may be repeated

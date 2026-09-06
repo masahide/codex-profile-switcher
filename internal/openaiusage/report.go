@@ -63,6 +63,14 @@ func FormatText(w io.Writer, report QuotaReport, verbose bool) error {
 			return err
 		}
 	}
+	if err := formatNotCoveredModels(w, report); err != nil {
+		return err
+	}
+	if report.BilledCostToday != nil {
+		if err := formatBilledCost(w, *report.BilledCostToday, verbose); err != nil {
+			return err
+		}
+	}
 	if !report.Window.NextReset.IsZero() {
 		if _, err := fmt.Fprintf(w, "Next reset: %s\n", formatUTC(report.Window.NextReset)); err != nil {
 			return err
@@ -85,8 +93,8 @@ func FormatText(w io.Writer, report QuotaReport, verbose bool) error {
 		return err
 	}
 	notes := []string{
-		"Remaining values are estimates derived from the Organization Usage API",
-		"and the published complimentary-token policy.",
+		"Complimentary used is the Usage API token count for incentivized-tier",
+		"mapped to a model group; remaining values are estimates from that count.",
 		"Confirm actual complimentary usage in the OpenAI Usage Dashboard.",
 		"A request that crosses the quota may be billed in full; remaining is not a guarantee.",
 	}
@@ -120,7 +128,7 @@ func formatPool(w io.Writer, report QuotaReport, pool QuotaPool) error {
 	if _, err := fmt.Fprintf(w, "  quota:                 %s\n", formatOptionalInt(estimate.Quota)); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "  eligible traffic:      %s\n", formatInt(estimate.EligibleTraffic)); err != nil {
+	if _, err := fmt.Fprintf(w, "  complimentary used:    %s\n", formatInt(estimate.EligibleTraffic)); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "  estimated remaining:   %s\n", formatOptionalInt(estimate.EstimatedRemaining)); err != nil {
@@ -167,21 +175,93 @@ func formatDetails(w io.Writer, report QuotaReport) error {
 	if err := formatSortedCounts(w, report.Details.ServiceTierTraffic); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(w, "Unclassified models:"); err != nil {
+	if _, err := fmt.Fprintln(w, "Model/service-tier traffic:"); err != nil {
 		return err
 	}
-	if len(report.Details.UnclassifiedModels) == 0 {
-		if _, err := fmt.Fprintln(w, "  none"); err != nil {
-			return err
+	if err := formatModelServiceTierTraffic(w, report.Details.ModelServiceTierTraffic); err != nil {
+		return err
+	}
+	return nil
+}
+
+func formatModelServiceTierTraffic(w io.Writer, traffic map[string]map[string]int64) error {
+	models := make([]string, 0, len(traffic))
+	for model := range traffic {
+		models = append(models, model)
+	}
+	sort.Strings(models)
+	if len(models) == 0 {
+		_, err := fmt.Fprintln(w, "  none")
+		return err
+	}
+	for _, model := range models {
+		tiers := traffic[model]
+		serviceTiers := make([]string, 0, len(tiers))
+		for tier := range tiers {
+			serviceTiers = append(serviceTiers, tier)
 		}
-	} else {
-		for _, model := range report.Details.UnclassifiedModels {
-			if _, err := fmt.Fprintf(w, "  %s\n", model); err != nil {
+		sort.Strings(serviceTiers)
+		for _, tier := range serviceTiers {
+			if _, err := fmt.Fprintf(w, "  %-32s %-24s %s tokens\n", model, tier, formatInt(tiers[tier])); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func formatNotCoveredModels(w io.Writer, report QuotaReport) error {
+	if len(report.Details.NotCoveredModelTraffic) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintln(w, "Not covered by current complimentary-token policy"); err != nil {
+		return err
+	}
+	if err := formatTokenCounts(w, report.Details.NotCoveredModelTraffic); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintln(w)
+	return err
+}
+
+func formatTokenCounts(w io.Writer, counts map[string]int64) error {
+	keys := make([]string, 0, len(counts))
+	for key := range counts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if _, err := fmt.Fprintf(w, "  %s  %s tokens\n", key, formatInt(counts[key])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func formatBilledCost(w io.Writer, summary CostSummary, verbose bool) error {
+	if _, err := fmt.Fprintln(w, "Billed cost today"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  total: %s\n", formatMoney(summary.Total, summary.Currency)); err != nil {
+		return err
+	}
+	if verbose && len(summary.LineItems) > 0 {
+		if _, err := fmt.Fprintln(w, "  line items:"); err != nil {
+			return err
+		}
+		keys := make([]string, 0, len(summary.LineItems))
+		for key := range summary.LineItems {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			if _, err := fmt.Fprintf(w, "    %-28s %s\n", key, formatMoney(summary.LineItems[key], summary.Currency)); err != nil {
+				return err
+			}
+		}
+	}
+	_, err := fmt.Fprintln(w)
+	return err
 }
 
 func formatSortedCounts(w io.Writer, counts map[string]int64) error {
@@ -240,4 +320,13 @@ func formatOptionalInt(value *int64) string {
 		return "unknown"
 	}
 	return formatInt(*value)
+}
+
+func formatMoney(value float64, currency string) string {
+	switch strings.ToLower(strings.TrimSpace(currency)) {
+	case "", "usd":
+		return fmt.Sprintf("$%.2f", value)
+	default:
+		return fmt.Sprintf("%s %.2f", strings.ToUpper(strings.TrimSpace(currency)), value)
+	}
 }
