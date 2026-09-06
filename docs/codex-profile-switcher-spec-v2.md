@@ -1,7 +1,12 @@
-# Codex Profile Switcher `cx` 実装仕様書 改訂版
+# Codex Profile Switcher `cx` 実装仕様書 改訂版（旧仕様）
 
 更新日: 2026-09-06  
 仕様版: v2
+
+> この文書の profile directory 分離方式は旧仕様です。現行の `cx` は
+> `CODEX_HOME` を変更せず、同じ Codex 環境で ChatGPT 認証と OpenAI API
+> キー認証を切り替えます。現行の利用方法とセキュリティ境界は README を
+> 参照してください。
 
 ## 1. 目的
 

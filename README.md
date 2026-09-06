@@ -1,6 +1,6 @@
 # codex-profile-switcher (`cx`)
 
-`cx` は、Codex CLI の実行環境を `CODEX_HOME` で profile ごとに分離する小さなクロスプラットフォーム CLI です。MVP では `chatgpt` と `api` を提供します。
+`cx` は、Codex の設定、セッション、履歴、skills などを現在の環境のまま維持しながら、ChatGPT 認証と OpenAI API キー認証を切り替える小さなクロスプラットフォーム CLI です。
 
 ## Install
 
@@ -67,29 +67,33 @@ WSL は Linux として扱います。
 
 ## Initial setup
 
-まず Codex CLI が PATH にあることを確認してください。profile ごとの認証は Codex に委譲します。
+まず Codex CLI が PATH にあることを確認してください。認証と credential の保存は Codex に委譲します。
 
 ChatGPT account authentication:
 
 ```bash
-cx login chatgpt
+cx chatgpt
 ```
 
 OpenAI API key authentication:
 
+Linux、WSL、macOS:
+
 ```bash
-printenv OPENAI_API_KEY | cx login api
+export CX_OPENAI_API_KEY="sk-..."
+cx api
 ```
 
 PowerShell:
 
 ```powershell
-$env:OPENAI_API_KEY | cx login api
+$env:CX_OPENAI_API_KEY = "sk-..."
+cx api
 ```
 
-`codex login --with-api-key` は API key を stdin から読むため、`cx login api` を端末から単独で実行せず、上記のように pipe してください。API key の入力、credential の保存、token refresh は Codex CLI が行います。`cx` は key を引数で受け取らず、Codex の `auth.json` を読み書き・解析しません。
+`cx api` は現在の認証状態を確認し、必要な場合だけ `codex logout` の後に `codex login --with-api-key` を実行します。API key は command line argument、環境変数、temporary file ではなく stdin から Codex へ渡します。API key の保存と token refresh は Codex CLI が行い、`cx` は Codex の `auth.json` を読み書き・解析しません。
 
-ChatGPT account authentication は Free、Go、Plus、Pro などの ChatGPT プランで利用でき、プランによって利用上限が変わります。認証方式の profile はプラン名ではなく認証方式を表すため、プランを変更しても `cx chatgpt` のまま使えます。
+ChatGPT account authentication は Free、Go、Plus、Pro などの ChatGPT プランで利用でき、プランによって利用上限が変わります。`chatgpt` はプラン名ではなく認証方式を表すため、プランを変更しても `cx chatgpt` のまま使えます。
 
 ## Launch
 
@@ -102,20 +106,7 @@ cx api --model gpt-5.6-sol
 
 Codex arguments は順序を変えずに透過します。
 
-profile directory はデフォルトで次の場所です。
-
-```text
-<UserHome>/.codex-profiles/chatgpt
-<UserHome>/.codex-profiles/api
-```
-
-`cx` は `CODEX_HOME` 全体を分離するため、認証だけでなく `config.toml` や Codex のローカル状態も profile ごとに独立します。既存の `<UserHome>/.codex/config.toml` は自動コピー・同期されません。必要な設定は profile ごとの `config.toml` に別途用意してください。
-
-環境変数で変更できます。
-
-```bash
-CX_HOME=/mnt/d/codex-profiles cx api
-```
+`cx chatgpt` と `cx api` は同じ `CODEX_HOME` を利用します。`CODEX_HOME` を親環境で設定している場合はその値を尊重し、未設定なら Codex の既定値（通常は `~/.codex`）が使われます。`config.toml`、model 設定、MCP、sessions、history、skills などは認証方式間で共有されます。`CX_HOME` や `.codex-profiles` は使用しません。
 
 Codex executable は通常 `codex` を PATH から探します。別の executable を使う場合は `CX_CODEX_BIN` を指定します。
 
@@ -126,12 +117,12 @@ CX_CODEX_BIN=/opt/codex/bin/codex cx chatgpt
 確認用コマンド:
 
 ```bash
-cx profiles
-cx path chatgpt
-cx path api
 cx status
-cx status chatgpt
 ```
+
+`cx login chatgpt` または `cx login api` は、認証を切り替えるだけで Codex 本体を起動しない形式として利用できます。通常は `cx chatgpt` または `cx api` を使ってください。
+
+認証切替は現在の `CODEX_HOME` の Codex credential cache を変更します。同じ `CODEX_HOME` を使う IDE extension など、他の Codex client にも新しい認証方式が反映される可能性があります。別の Codex session が同じ環境を使用中の間は認証を切り替えないでください。
 
 ## Quota estimate
 
@@ -197,12 +188,12 @@ unknown model は勝手に Large/Small へ分類せず、推定から除外し�
 ## Security boundary
 
 - Codex の `auth.json` を直接操作しません。
-- `config.toml` と Codex のローカル状態を profile 間で共有しません。
-- ChatGPT OAuth token、Codex API key、Admin API key を保存・解析しません。
-- Codex 子プロセスへ `OPENAI_ADMIN_KEY`、`OPENAI_API_KEY`、`CODEX_API_KEY`、`CODEX_ACCESS_TOKEN` を継承しません。
+- `CODEX_HOME` を変更せず、`config.toml` と Codex のローカル状態を認証方式間で共有します。
+- ChatGPT OAuth token、Codex API key、Admin API key を `cx` が保存・解析しません。
+- API login の key は `CX_OPENAI_API_KEY` から読み取り、Codex の stdin にだけ渡します。Codex 子プロセスへ `OPENAI_ADMIN_KEY`、`OPENAI_API_KEY`、`CX_OPENAI_API_KEY`、`CODEX_API_KEY`、`CODEX_ACCESS_TOKEN` を継承しません。
 - `cx quota` は Admin API key を HTTPS の `Authorization: Bearer` header にだけ設定します。
 - Dashboard の private API、HTML scraping、browser automation は使用しません。
-- profile directory は新規作成時に Unix で mode `0700` を指定します。
+- `logout` 後の login に失敗しても、`cx` は以前の credential を保持していないため自動復元を試みません。
 
 ## Development
 

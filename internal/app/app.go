@@ -13,15 +13,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/masahide/codex-profile-switcher/internal/auth"
 	"github.com/masahide/codex-profile-switcher/internal/codex"
 	"github.com/masahide/codex-profile-switcher/internal/openaiusage"
 	"github.com/masahide/codex-profile-switcher/internal/profile"
 )
 
 type CodexRunner interface {
-	Run(context.Context, profile.Profile, []string) error
-	Login(context.Context, profile.Profile) error
-	LoginStatus(context.Context, profile.Profile) error
+	Run(context.Context, []string) error
 }
 
 type UsageClient interface {
@@ -30,26 +29,27 @@ type UsageClient interface {
 
 // App is the testable command handler for cx.
 type App struct {
-	Codex       CodexRunner
-	Usage       UsageClient
-	Out         io.Writer
-	ErrOut      io.Writer
-	ProfileRoot func() (string, error)
-	Now         func() time.Time
-	Env         func(string) string
-	Policy      openaiusage.ComplimentaryPolicy
+	Codex  CodexRunner
+	Auth   auth.Manager
+	Usage  UsageClient
+	Out    io.Writer
+	ErrOut io.Writer
+	Now    func() time.Time
+	Env    func(string) string
+	Policy openaiusage.ComplimentaryPolicy
 }
 
 func New(version string) *App {
+	runner := &codex.Runner{}
 	return &App{
-		Codex:       &codex.Runner{},
-		Usage:       openaiusage.NewClient(version),
-		Out:         os.Stdout,
-		ErrOut:      os.Stderr,
-		ProfileRoot: profile.Root,
-		Now:         time.Now,
-		Env:         os.Getenv,
-		Policy:      openaiusage.DefaultPolicy(),
+		Codex:  runner,
+		Auth:   runner,
+		Usage:  openaiusage.NewClient(version),
+		Out:    os.Stdout,
+		ErrOut: os.Stderr,
+		Now:    time.Now,
+		Env:    os.Getenv,
+		Policy: openaiusage.DefaultPolicy(),
 	}
 }
 
@@ -71,10 +71,6 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		return a.runLogin(ctx, args[1:])
 	case "status":
 		return a.runStatus(ctx, args[1:])
-	case "path":
-		return a.runPath(args[1:])
-	case "profiles":
-		return a.runProfiles(args[1:])
 	case "quota":
 		return a.runQuota(ctx, args[1:])
 	}
@@ -85,13 +81,26 @@ func (a *App) Run(ctx context.Context, args []string) int {
 	return a.usageError("unknown command or profile: %s", args[0])
 }
 
-func (a *App) runCodex(ctx context.Context, p profile.Profile, args []string) int {
-	if a.Codex == nil {
+func (a *App) runCodex(ctx context.Context, p profile.AuthMode, args []string) int {
+	manager := a.authManager()
+	if a.Codex == nil || manager == nil {
 		a.errorf("Codex runner is not configured")
 		return 1
 	}
-	if err := a.Codex.Run(ctx, p, args); err != nil {
-		a.errorf("Codex failed: %v", err)
+	apiKey := ""
+	if p == profile.API {
+		apiKey = a.env(auth.APIKeyEnvironment)
+	}
+	if err := auth.EnsureAuthMode(ctx, manager, p, apiKey); err != nil {
+		a.reportAuthError(err, apiKey)
+		return 1
+	}
+	if err := a.Codex.Run(ctx, args); err != nil {
+		message := err.Error()
+		if apiKey != "" {
+			message = strings.ReplaceAll(message, apiKey, "[redacted]")
+		}
+		a.errorf("Codex failed: %s", message)
 		return codex.ExitCode(err)
 	}
 	return 0
@@ -99,101 +108,58 @@ func (a *App) runCodex(ctx context.Context, p profile.Profile, args []string) in
 
 func (a *App) runLogin(ctx context.Context, args []string) int {
 	if len(args) != 1 {
-		return a.usageError("usage: cx login <profile>")
+		return a.usageError("usage: cx login <chatgpt|api>")
 	}
 	p, err := profile.Parse(args[0])
 	if err != nil {
 		return a.unknownProfile(args[0])
 	}
-	if a.Codex == nil {
+	manager := a.authManager()
+	if manager == nil {
 		a.errorf("Codex runner is not configured")
 		return 1
 	}
-	if err := a.Codex.Login(ctx, p); err != nil {
-		if errors.Is(err, codex.ErrAPIKeyRequiresStdin) {
-			a.errorf("API login requires the API key on stdin\n\n  printenv OPENAI_API_KEY | cx login api")
-			return 2
-		}
-		a.errorf("Codex login failed: %v", err)
+	apiKey := ""
+	if p == profile.API {
+		apiKey = a.env(auth.APIKeyEnvironment)
+	}
+	if err := auth.EnsureAuthMode(ctx, manager, p, apiKey); err != nil {
+		a.reportAuthError(err, apiKey)
 		return 1
 	}
 	return 0
 }
 
 func (a *App) runStatus(ctx context.Context, args []string) int {
-	var profiles []profile.Profile
-	switch len(args) {
-	case 0:
-		profiles = profile.Builtins()
-	case 1:
-		p, err := profile.Parse(args[0])
-		if err != nil {
-			return a.unknownProfile(args[0])
-		}
-		profiles = []profile.Profile{p}
-	default:
-		return a.usageError("usage: cx status [profile]")
+	if len(args) != 0 {
+		return a.usageError("usage: cx status")
 	}
-	if a.Codex == nil {
+	manager := a.authManager()
+	if manager == nil {
 		a.errorf("Codex runner is not configured")
 		return 1
 	}
 
-	failed := false
-	for _, p := range profiles {
-		if err := a.writef("%s:\n", p); err != nil {
-			a.errorf("write status output: %v", err)
-			return 1
-		}
-		if err := a.Codex.LoginStatus(ctx, p); err != nil {
-			a.errorf("%s status failed: %v", p, err)
-			failed = true
-		}
-	}
-	if failed {
-		return 1
-	}
-	return 0
-}
-
-func (a *App) runPath(args []string) int {
-	if len(args) != 1 {
-		return a.usageError("usage: cx path <profile>")
-	}
-	p, err := profile.Parse(args[0])
+	mode, err := manager.CurrentMode(ctx)
 	if err != nil {
-		return a.unknownProfile(args[0])
-	}
-	rootFunc := a.ProfileRoot
-	if rootFunc == nil {
-		rootFunc = profile.Root
-	}
-	root, err := rootFunc()
-	if err != nil {
-		a.errorf("resolve profile root: %v", err)
+		a.reportAuthError(fmt.Errorf("%w: %v", auth.ErrUnknownAuthMode, err), "")
 		return 1
 	}
-	path, err := profile.PathFromRoot(root, p)
-	if err != nil {
-		a.errorf("resolve profile path: %v", err)
+	var label string
+	switch mode {
+	case profile.ChatGPT:
+		label = "ChatGPT"
+	case profile.API:
+		label = "OpenAI API key"
+	case profile.None:
+		label = "not logged in"
+	default:
+		a.reportAuthError(auth.ErrUnknownAuthMode, "")
 		return 1
 	}
-	if err := a.writef("%s\n", path); err != nil {
-		a.errorf("write path: %v", err)
+	if err := a.writef("Authentication: %s\n", label); err != nil {
+		a.errorf("write status output: %v", err)
 		return 1
-	}
-	return 0
-}
-
-func (a *App) runProfiles(args []string) int {
-	if len(args) != 0 {
-		return a.usageError("usage: cx profiles")
-	}
-	for _, p := range profile.Builtins() {
-		if err := a.writef("%s\n", p); err != nil {
-			a.errorf("write profiles: %v", err)
-			return 1
-		}
 	}
 	return 0
 }
@@ -407,29 +373,27 @@ func (a *App) runHelp(args []string) int {
 }
 
 func (a *App) help() int {
-	const text = `cx - switch isolated Codex CLI profiles
+	const text = `cx - switch authentication for the current Codex environment
 
 Usage:
   cx chatgpt [codex args...]
   cx api [codex args...]
-  cx login <profile>
-  cx status [profile]
-  cx path <profile>
-  cx profiles
+  cx login <chatgpt|api>
+  cx status
   cx quota [options]
   cx help
 
-Profiles:
+Authentication modes:
   chatgpt ChatGPT account authentication
   api     OpenAI API key authentication
 
-API key login:
-  printenv OPENAI_API_KEY | cx login api
-  PowerShell: $env:OPENAI_API_KEY | cx login api
+API authentication:
+  CX_OPENAI_API_KEY=sk-... cx api
+  PowerShell: $env:CX_OPENAI_API_KEY = 'sk-...'; cx api
 
-The Codex CLI owns authentication and credential storage. cx only sets
-CODEX_HOME for the child process; config.toml and local Codex state are also
-profile-specific. cx never reads or edits auth.json.
+The Codex CLI owns authentication and credential storage. cx uses the
+codex login status, logout, and login commands and never reads or edits
+auth.json. Both modes use the current CODEX_HOME and share Codex state.
 
 Use "cx quota --help" for the complimentary-token estimate options.
 `
@@ -474,6 +438,21 @@ func (a *App) unknownProfile(name string) int {
 	return a.usageError("unknown command or profile: %s", name)
 }
 
+func (a *App) reportAuthError(err error, apiKey string) {
+	if errors.Is(err, auth.ErrUnknownAuthMode) {
+		a.errorf("unable to determine current Codex authentication mode\nRun `codex login status` and retry.")
+		return
+	}
+	message := err.Error()
+	if apiKey != "" {
+		message = strings.ReplaceAll(message, apiKey, "[redacted]")
+	}
+	a.errorf("%s", message)
+	if auth.IsAfterLogout(err) {
+		a.errorf("Codex is currently not authenticated; configuration and sessions were not removed.\nRun:\n  cx chatgpt\n\nor:\n  cx api")
+	}
+}
+
 func (a *App) usageError(format string, args ...interface{}) int {
 	a.errorf(format, args...)
 	return 2
@@ -484,6 +463,16 @@ func (a *App) env(key string) string {
 		return a.Env(key)
 	}
 	return os.Getenv(key)
+}
+
+func (a *App) authManager() auth.Manager {
+	if a.Auth != nil {
+		return a.Auth
+	}
+	if manager, ok := a.Codex.(auth.Manager); ok {
+		return manager
+	}
+	return nil
 }
 
 func (a *App) stdout() io.Writer {

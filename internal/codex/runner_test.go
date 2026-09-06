@@ -1,46 +1,37 @@
 package codex
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/masahide/codex-profile-switcher/internal/profile"
 )
 
-func TestWithCodexHomeReplacesParentValue(t *testing.T) {
-	environ := []string{"PATH=/bin", "CODEX_HOME=/parent", "OTHER=value"}
-	got := withCodexHome(environ, "/child")
-	if strings.Count(strings.Join(got, "\n"), "CODEX_HOME=") != 1 {
-		t.Fatalf("CODEX_HOME entries = %v", got)
-	}
-	if got[len(got)-1] != "CODEX_HOME=/child" {
-		t.Fatalf("last environment entry = %q", got[len(got)-1])
-	}
-	if environ[1] != "CODEX_HOME=/parent" {
-		t.Fatalf("input environment was changed: %v", environ)
-	}
-}
-
-func TestWithCodexHomeRemovesCredentialEnvironment(t *testing.T) {
+func TestSanitizeEnvironmentPreservesCodexHomeAndRemovesCredentials(t *testing.T) {
 	environ := []string{
+		"CODEX_HOME=/parent",
 		"OPENAI_ADMIN_KEY=admin-secret",
 		"OPENAI_API_KEY=api-secret",
+		"CX_OPENAI_API_KEY=cx-secret",
 		"CODEX_API_KEY=codex-secret",
 		"CODEX_ACCESS_TOKEN=access-secret",
 		"KEEP_ME=value",
 	}
-	got := withCodexHome(environ, "/child")
+	got := sanitizeEnvironment(environ)
 	joined := strings.Join(got, "\n")
-	for _, secret := range []string{"admin-secret", "api-secret", "codex-secret", "access-secret"} {
+	for _, secret := range []string{"admin-secret", "api-secret", "cx-secret", "codex-secret", "access-secret"} {
 		if strings.Contains(joined, secret) {
 			t.Fatalf("credential value %q was inherited: %v", secret, got)
 		}
 	}
-	for _, key := range []string{"OPENAI_ADMIN_KEY", "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"} {
+	for _, key := range []string{"OPENAI_ADMIN_KEY", "OPENAI_API_KEY", "CX_OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"} {
 		for _, entry := range got {
 			entryKey, _, _ := strings.Cut(entry, "=")
 			if sameEnvKey(entryKey, key) {
@@ -48,21 +39,22 @@ func TestWithCodexHomeRemovesCredentialEnvironment(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(joined, "KEEP_ME=value") {
-		t.Fatalf("non-credential environment was removed: %v", got)
+	if !strings.Contains(joined, "CODEX_HOME=/parent") || !strings.Contains(joined, "KEEP_ME=value") {
+		t.Fatalf("shared environment was changed: %v", got)
+	}
+	if environ[0] != "CODEX_HOME=/parent" {
+		t.Fatalf("input environment was changed: %v", environ)
 	}
 }
 
-func TestCommandSetsChildHomeAndPassesArguments(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("CODEX_HOME", "/parent")
+func TestCommandKeepsParentHomeAndPassesArguments(t *testing.T) {
 	runner := &Runner{
-		Binary: filepath.Join(root, "fake-codex"),
-		ProfilePath: func(p profile.Profile) (string, error) {
-			return filepath.Join(root, string(p)), nil
+		Binary: "codex-test",
+		Environ: func() []string {
+			return []string{"PATH=/bin", "CODEX_HOME=/parent", "OTHER=value"}
 		},
 	}
-	cmd, err := runner.command(context.Background(), profile.ChatGPT, []string{"exec", "hello world", "--model", "gpt-test"})
+	cmd, err := runner.command(context.Background(), []string{"exec", "hello world", "--model", "gpt-test"})
 	if err != nil {
 		t.Fatalf("command returned error: %v", err)
 	}
@@ -76,55 +68,102 @@ func TestCommandSetsChildHomeAndPassesArguments(t *testing.T) {
 			values[key] = val
 		}
 	}
-	wantHome := filepath.Join(root, "chatgpt")
-	if values["CODEX_HOME"] != wantHome {
-		t.Fatalf("child CODEX_HOME = %q, want %q", values["CODEX_HOME"], wantHome)
+	if values["CODEX_HOME"] != "/parent" {
+		t.Fatalf("child CODEX_HOME = %q, want /parent", values["CODEX_HOME"])
 	}
-	if got := os.Getenv("CODEX_HOME"); got != "/parent" {
-		t.Fatalf("parent CODEX_HOME = %q, want /parent", got)
-	}
-	if _, err := os.Stat(wantHome); err != nil {
-		t.Fatalf("profile directory was not created: %v", err)
+	if _, ok := values["CX_OPENAI_API_KEY"]; ok {
+		t.Fatal("CX_OPENAI_API_KEY was passed to Codex")
 	}
 }
 
-func TestLoginArgsAreProfileSpecific(t *testing.T) {
-	chatGPTArgs, err := loginArgs(profile.ChatGPT)
-	if err != nil {
-		t.Fatalf("chatgpt loginArgs returned error: %v", err)
+func TestParseAuthModeOutput(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   profile.AuthMode
+		ok     bool
+	}{
+		{name: "chatgpt", output: "Logged in using ChatGPT\n", want: profile.ChatGPT, ok: true},
+		{name: "api", output: "Logged in using API key\n", want: profile.API, ok: true},
+		{name: "none", output: "Not logged in\n", want: profile.None, ok: true},
+		{name: "unknown", output: "unexpected status\n", want: profile.Unknown, ok: false},
 	}
-	if !equalStrings(chatGPTArgs, []string{"login"}) {
-		t.Fatalf("chatgpt args = %v", chatGPTArgs)
-	}
-	apiArgs, err := loginArgs(profile.API)
-	if err != nil {
-		t.Fatalf("api loginArgs returned error: %v", err)
-	}
-	if !equalStrings(apiArgs, []string{"login", "--with-api-key"}) {
-		t.Fatalf("api args = %v", apiArgs)
-	}
-	if _, err := loginArgs(profile.Profile("work")); err != profile.ErrInvalidProfile {
-		t.Fatalf("invalid profile error = %v", err)
-	}
-}
-
-func TestAPIKeyLoginRejectsTerminalStdin(t *testing.T) {
-	terminal, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0)
-	if err != nil {
-		t.Skipf("terminal is unavailable: %v", err)
-	}
-	defer terminal.Close()
-
-	runner := &Runner{Stdin: terminal}
-	if err := runner.Login(context.Background(), profile.API); err != ErrAPIKeyRequiresStdin {
-		t.Fatalf("Login error = %v, want %v", err, ErrAPIKeyRequiresStdin)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := parseAuthModeOutput(test.output)
+			if got != test.want || ok != test.ok {
+				t.Fatalf("parseAuthModeOutput(%q) = (%q, %t), want (%q, %t)", test.output, got, ok, test.want, test.ok)
+			}
+		})
 	}
 }
 
-func TestAPIKeyLoginAcceptsPipedStdin(t *testing.T) {
-	runner := &Runner{Stdin: strings.NewReader("api-key\n")}
-	if got := stdinIsTerminal(runner.Stdin); got {
-		t.Fatal("pipe reader was detected as a terminal")
+func TestCurrentModeUsesCodexStatus(t *testing.T) {
+	tests := []struct {
+		name    string
+		output  string
+		exit    int
+		want    profile.AuthMode
+		wantErr bool
+	}{
+		{name: "chatgpt", output: "Logged in using ChatGPT", want: profile.ChatGPT},
+		{name: "api", output: "Logged in using API key", want: profile.API},
+		{name: "none", output: "Not logged in", exit: 1, want: profile.None},
+		{name: "unknown", output: "unexpected status", want: profile.Unknown},
+		{name: "status failure", output: "unexpected status", exit: 7, want: profile.Unknown, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("CX_CODEX_TEST_HELPER", "status")
+			t.Setenv("CX_CODEX_TEST_HELPER_OUTPUT", test.output)
+			t.Setenv("CX_CODEX_TEST_HELPER_EXIT", strconv.Itoa(test.exit))
+			runner := &Runner{
+				Binary:        os.Args[0],
+				CommandPrefix: []string{"-test.run=^TestCodexRunnerHelper$"},
+			}
+			got, err := runner.CurrentMode(context.Background())
+			if got != test.want {
+				t.Fatalf("CurrentMode mode = %q, want %q (err=%v)", got, test.want, err)
+			}
+			if (err != nil) != test.wantErr {
+				t.Fatalf("CurrentMode error = %v, want error: %t", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoginAPIUsesStdinAndRedactsChildOutput(t *testing.T) {
+	const apiKey = "dummy-api-key"
+	t.Setenv("CX_CODEX_TEST_HELPER", "api-login")
+	runner := &Runner{
+		Binary:        os.Args[0],
+		CommandPrefix: []string{"-test.run=^TestCodexRunnerHelper$"},
+		Environ:       os.Environ,
+		Stdout:        new(bytes.Buffer),
+		Stderr:        new(bytes.Buffer),
+	}
+	if err := runner.LoginAPI(context.Background(), apiKey); err != nil {
+		t.Fatalf("LoginAPI returned error: %v", err)
+	}
+	stdout := runner.Stdout.(*bytes.Buffer).String()
+	stderr := runner.Stderr.(*bytes.Buffer).String()
+	for streamName, stream := range map[string]string{"stdout": stdout, "stderr": stderr} {
+		if strings.Contains(stream, apiKey) {
+			t.Fatalf("API key appeared in %s: %q", streamName, stream)
+		}
+		if !strings.Contains(stream, "[redacted]") {
+			t.Fatalf("%s did not contain redacted child output: %q", streamName, stream)
+		}
+	}
+	if strings.Contains(stdout+stderr, "OPENAI_ADMIN_KEY") {
+		t.Fatal("credential environment name appeared in child output")
+	}
+}
+
+func TestLoginAPIRejectsEmptyKey(t *testing.T) {
+	runner := &Runner{Binary: "does-not-run"}
+	if err := runner.LoginAPI(context.Background(), " \n"); err != ErrAPIKeyEmpty {
+		t.Fatalf("LoginAPI error = %v, want %v", err, ErrAPIKeyEmpty)
 	}
 }
 
@@ -149,6 +188,30 @@ func TestBinarySelectionPrefersExplicitThenEnvironment(t *testing.T) {
 	runner.Binary = "explicit-codex"
 	if got, err := runner.binary(); err != nil || got != "explicit-codex" {
 		t.Fatalf("explicit binary = %q, %v", got, err)
+	}
+}
+
+func TestCodexRunnerHelper(t *testing.T) {
+	switch os.Getenv("CX_CODEX_TEST_HELPER") {
+	case "status":
+		_, _ = io.WriteString(os.Stdout, os.Getenv("CX_CODEX_TEST_HELPER_OUTPUT"))
+		_, _ = io.WriteString(os.Stderr, os.Getenv("CX_CODEX_TEST_HELPER_OUTPUT"))
+		exitHelper(t)
+	case "api-login":
+		input, _ := io.ReadAll(os.Stdin)
+		_, _ = fmt.Fprintf(os.Stdout, "%s\n%s", strings.Join(os.Args[1:], " "), input)
+		_, _ = fmt.Fprint(os.Stderr, string(input))
+		return
+	}
+}
+
+func exitHelper(t *testing.T) {
+	exitCode, err := strconv.Atoi(os.Getenv("CX_CODEX_TEST_HELPER_EXIT"))
+	if err != nil {
+		exitCode = 0
+	}
+	if exitCode != 0 {
+		os.Exit(exitCode)
 	}
 }
 
