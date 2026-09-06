@@ -93,8 +93,8 @@ func FormatText(w io.Writer, report QuotaReport, verbose bool) error {
 		return err
 	}
 	notes := []string{
-		"Remaining values are estimates derived from the Organization Usage API",
-		"and the published complimentary-token policy.",
+		"Complimentary used is the Usage API token count for incentivized-tier",
+		"mapped to a model group; remaining values are estimates from that count.",
 		"Confirm actual complimentary usage in the OpenAI Usage Dashboard.",
 		"A request that crosses the quota may be billed in full; remaining is not a guarantee.",
 	}
@@ -128,7 +128,7 @@ func formatPool(w io.Writer, report QuotaReport, pool QuotaPool) error {
 	if _, err := fmt.Fprintf(w, "  quota:                 %s\n", formatOptionalInt(estimate.Quota)); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "  eligible traffic:      %s\n", formatInt(estimate.EligibleTraffic)); err != nil {
+	if _, err := fmt.Fprintf(w, "  complimentary used:    %s\n", formatInt(estimate.EligibleTraffic)); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "  estimated remaining:   %s\n", formatOptionalInt(estimate.EstimatedRemaining)); err != nil {
@@ -174,6 +174,38 @@ func formatDetails(w io.Writer, report QuotaReport) error {
 	}
 	if err := formatSortedCounts(w, report.Details.ServiceTierTraffic); err != nil {
 		return err
+	}
+	if _, err := fmt.Fprintln(w, "Model/service-tier traffic:"); err != nil {
+		return err
+	}
+	if err := formatModelServiceTierTraffic(w, report.Details.ModelServiceTierTraffic); err != nil {
+		return err
+	}
+	return nil
+}
+
+func formatModelServiceTierTraffic(w io.Writer, traffic map[string]map[string]int64) error {
+	models := make([]string, 0, len(traffic))
+	for model := range traffic {
+		models = append(models, model)
+	}
+	sort.Strings(models)
+	if len(models) == 0 {
+		_, err := fmt.Fprintln(w, "  none")
+		return err
+	}
+	for _, model := range models {
+		tiers := traffic[model]
+		serviceTiers := make([]string, 0, len(tiers))
+		for tier := range tiers {
+			serviceTiers = append(serviceTiers, tier)
+		}
+		sort.Strings(serviceTiers)
+		for _, tier := range serviceTiers {
+			if _, err := fmt.Fprintf(w, "  %-32s %-24s %s tokens\n", model, tier, formatInt(tiers[tier])); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

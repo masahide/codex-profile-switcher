@@ -5,13 +5,14 @@ package openaiusage
 import "time"
 
 const (
-	DefaultBaseURL         = "https://api.openai.com"
-	UsageEndpointPath      = "/v1/organization/usage/completions"
-	CostsEndpointPath      = "/v1/organization/costs"
-	OfficialDashboardURL   = "https://platform.openai.com/usage/chat-completions"
-	AdminAPIKeyEnvironment = "OPENAI_ADMIN_KEY"
-	UsageTierEnvironment   = "CX_OPENAI_USAGE_TIER"
-	ProjectIDsEnvironment  = "CX_OPENAI_PROJECT_IDS"
+	DefaultBaseURL          = "https://api.openai.com"
+	UsageEndpointPath       = "/v1/organization/usage/completions"
+	CostsEndpointPath       = "/v1/organization/costs"
+	IncentivizedServiceTier = "incentivized-tier"
+	OfficialDashboardURL    = "https://platform.openai.com/usage/chat-completions"
+	AdminAPIKeyEnvironment  = "OPENAI_ADMIN_KEY"
+	UsageTierEnvironment    = "CX_OPENAI_USAGE_TIER"
+	ProjectIDsEnvironment   = "CX_OPENAI_PROJECT_IDS"
 )
 
 // UsageQuery describes the time and optional project scope for a usage query.
@@ -100,7 +101,10 @@ type Scope struct {
 }
 
 type PoolEstimate struct {
-	Quota                 *int64   `json:"quota"`
+	Quota *int64 `json:"quota"`
+	// EligibleTraffic is retained as the JSON field name for compatibility.
+	// Its value is the actual token count observed in incentivized-tier for
+	// models mapped to this pool, i.e. the complimentary usage used below.
 	EligibleTraffic       int64    `json:"eligible_traffic"`
 	EstimatedRemaining    *int64   `json:"estimated_remaining"`
 	EstimatedUsagePercent *float64 `json:"estimated_usage_percent"`
@@ -109,12 +113,13 @@ type PoolEstimate struct {
 // ReportDetails contains diagnostic data for human-readable output and is
 // kept out of the compact JSON shape so that --json remains machine-readable.
 type ReportDetails struct {
-	UsageTierSource        string
-	ModelTraffic           map[string]int64
-	EligibleModels         map[string][]string
-	ServiceTierTraffic     map[string]int64
-	NotCoveredModels       []string
-	NotCoveredModelTraffic map[string]int64
+	UsageTierSource         string
+	ModelTraffic            map[string]int64
+	EligibleModels          map[string][]string
+	ServiceTierTraffic      map[string]int64
+	ModelServiceTierTraffic map[string]map[string]int64
+	NotCoveredModels        []string
+	NotCoveredModelTraffic  map[string]int64
 	// Deprecated: use NotCoveredModels. This compatibility field is not shown
 	// in user-facing output; the wording is intentionally policy-oriented.
 	UnclassifiedModels []string

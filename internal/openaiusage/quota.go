@@ -5,10 +5,10 @@ import (
 	"sort"
 )
 
-// CalculateEstimate aggregates eligible model traffic and applies the policy
-// only when the caller supplied a valid Usage Tier. service_tier is retained
-// for diagnostics but is never interpreted as an undocumented free-tier
-// literal.
+// CalculateEstimate aggregates Usage API traffic by model and service_tier.
+// Only the exact incentivized service tier contributes to complimentary used;
+// default and every other tier remain diagnostics and never affect the quota
+// estimate. Costs API data is intentionally not an input to this function.
 func CalculateEstimate(results []CompletionUsageResult, policy ComplimentaryPolicy, usageTier *int) QuotaReport {
 	report := QuotaReport{
 		Kind:                    "estimate",
@@ -18,12 +18,13 @@ func CalculateEstimate(results []CompletionUsageResult, policy ComplimentaryPoli
 		OfficialVerificationURL: OfficialDashboardURL,
 		Warnings:                make([]string, 0),
 		Details: ReportDetails{
-			ModelTraffic:           make(map[string]int64),
-			EligibleModels:         make(map[string][]string),
-			ServiceTierTraffic:     make(map[string]int64),
-			NotCoveredModels:       make([]string, 0),
-			NotCoveredModelTraffic: make(map[string]int64),
-			UnclassifiedModels:     make([]string, 0),
+			ModelTraffic:            make(map[string]int64),
+			EligibleModels:          make(map[string][]string),
+			ServiceTierTraffic:      make(map[string]int64),
+			ModelServiceTierTraffic: make(map[string]map[string]int64),
+			NotCoveredModels:        make([]string, 0),
+			NotCoveredModelTraffic:  make(map[string]int64),
+			UnclassifiedModels:      make([]string, 0),
 		},
 	}
 
@@ -47,10 +48,19 @@ func CalculateEstimate(results []CompletionUsageResult, policy ComplimentaryPoli
 		report.Details.ModelTraffic[model] = addTokenCounts(report.Details.ModelTraffic[model], tokens)
 		tier := displayServiceTier(result.ServiceTier)
 		report.Details.ServiceTierTraffic[tier] = addTokenCounts(report.Details.ServiceTierTraffic[tier], tokens)
+		modelTiers := report.Details.ModelServiceTierTraffic[model]
+		if modelTiers == nil {
+			modelTiers = make(map[string]int64)
+			report.Details.ModelServiceTierTraffic[model] = modelTiers
+		}
+		modelTiers[tier] = addTokenCounts(modelTiers[tier], tokens)
 
-		pool, ok := ClassifyModel(result.Model)
+		pool, ok := classifyModelForEstimate(result.Model, policy)
 		if !ok {
 			report.Details.NotCoveredModelTraffic[model] = addTokenCounts(report.Details.NotCoveredModelTraffic[model], tokens)
+			continue
+		}
+		if result.ServiceTier != IncentivizedServiceTier {
 			continue
 		}
 		traffic[pool] = addTokenCounts(traffic[pool], tokens)

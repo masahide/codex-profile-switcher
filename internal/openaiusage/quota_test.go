@@ -35,7 +35,7 @@ func TestClassifyModelUsesOnlyPublishedList(t *testing.T) {
 func TestCalculateEstimateTierTwoLarge(t *testing.T) {
 	tier := 2
 	report := CalculateEstimate([]CompletionUsageResult{
-		result("gpt-5.6-sol", "default", 60_000, 20_000, 40_000),
+		result("gpt-5.6-sol", IncentivizedServiceTier, 60_000, 20_000, 40_000),
 	}, DefaultPolicy(), &tier)
 	large := report.Pools[string(QuotaPoolLarge)]
 	if large.Quota == nil || *large.Quota != 250_000 {
@@ -55,8 +55,8 @@ func TestCalculateEstimateTierTwoLarge(t *testing.T) {
 func TestCalculateEstimateTierFourLimits(t *testing.T) {
 	tier := 4
 	results := []CompletionUsageResult{
-		result("gpt-5.6-sol", "default", 50_000, 0, 50_000),
-		result("gpt-5.6-terra", "default", 25_000, 10_000, 25_000),
+		result("gpt-5.6-sol", IncentivizedServiceTier, 50_000, 0, 50_000),
+		result("gpt-5.6-terra", IncentivizedServiceTier, 25_000, 10_000, 25_000),
 	}
 	report := CalculateEstimate(results, DefaultPolicy(), &tier)
 	large := report.Pools[string(QuotaPoolLarge)]
@@ -72,10 +72,31 @@ func TestCalculateEstimateTierFourLimits(t *testing.T) {
 func TestCalculateEstimateCachedTokensAreNotAdded(t *testing.T) {
 	tier := 2
 	report := CalculateEstimate([]CompletionUsageResult{
-		result("gpt-5.6-sol", "default", 100, 900, 50),
+		result("gpt-5.6-sol", IncentivizedServiceTier, 100, 900, 50),
 	}, DefaultPolicy(), &tier)
 	if got := report.Pools[string(QuotaPoolLarge)].EligibleTraffic; got != 150 {
 		t.Fatalf("traffic = %d, want 150", got)
+	}
+}
+
+func TestCalculateEstimateExcludesDefaultTrafficFromComplimentaryUsed(t *testing.T) {
+	tier := 2
+	report := CalculateEstimate([]CompletionUsageResult{
+		result("gpt-5.6-sol", "default", 90_000, 0, 10_000),
+		result("gpt-5.6-sol", IncentivizedServiceTier, 60_000, 0, 5_000),
+	}, DefaultPolicy(), &tier)
+	large := report.Pools[string(QuotaPoolLarge)]
+	if large.EligibleTraffic != 65_000 {
+		t.Fatalf("complimentary used = %d, want 65000", large.EligibleTraffic)
+	}
+	if large.EstimatedRemaining == nil || *large.EstimatedRemaining != 185_000 {
+		t.Fatalf("remaining = %v, want 185000", large.EstimatedRemaining)
+	}
+	if got := report.Details.ModelServiceTierTraffic["gpt-5.6-sol"]["default"]; got != 100_000 {
+		t.Fatalf("default detail = %d, want 100000", got)
+	}
+	if got := report.Details.ModelServiceTierTraffic["gpt-5.6-sol"][IncentivizedServiceTier]; got != 65_000 {
+		t.Fatalf("incentivized detail = %d, want 65000", got)
 	}
 }
 
@@ -83,6 +104,7 @@ func TestCalculateEstimateOverQuotaAndUnknownServiceTier(t *testing.T) {
 	tier := 2
 	report := CalculateEstimate([]CompletionUsageResult{
 		result("gpt-5.6-sol", "", 200_000, 0, 81_000),
+		result("gpt-5.6-sol", IncentivizedServiceTier, 300_000, 0, 1),
 		result("unknown-model", "new-tier", 7, 0, 3),
 	}, DefaultPolicy(), &tier)
 	large := report.Pools[string(QuotaPoolLarge)]
@@ -97,28 +119,32 @@ func TestCalculateEstimateOverQuotaAndUnknownServiceTier(t *testing.T) {
 	}
 }
 
-func TestCalculateEstimateShowsPolicyNotCoveredTrafficWithoutAddingItToQuota(t *testing.T) {
+func TestCalculateEstimateUsesObservedAstraMapping(t *testing.T) {
 	tier := 2
 	report := CalculateEstimate([]CompletionUsageResult{
-		result("gpt-6-astra", "default", 500_000, 0, 49_278),
+		result("gpt-6-astra", IncentivizedServiceTier, 500_000, 0, 49_278),
+		result("gpt-6-astra", "default", 100_000, 0, 1),
 		result("gpt-5.6-sol", "default", 100, 0, 50),
 	}, DefaultPolicy(), &tier)
 
 	if _, ok := ClassifyModel("gpt-6-astra"); ok {
-		t.Fatal("gpt-6-astra was added to the complimentary-token policy")
+		t.Fatal("gpt-6-astra was added to the published model allowlist")
 	}
 	large := report.Pools[string(QuotaPoolLarge)]
-	if large.EligibleTraffic != 150 {
-		t.Fatalf("large traffic = %d, want 150", large.EligibleTraffic)
+	if large.EligibleTraffic != 549_278 {
+		t.Fatalf("large traffic = %d, want 549278", large.EligibleTraffic)
 	}
 	small := report.Pools[string(QuotaPoolSmall)]
 	if small.EligibleTraffic != 0 {
 		t.Fatalf("small traffic = %d, want 0", small.EligibleTraffic)
 	}
-	if got := report.Details.NotCoveredModelTraffic["gpt-6-astra"]; got != 549_278 {
-		t.Fatalf("not-covered traffic = %d, want 549278", got)
+	if _, ok := report.Details.NotCoveredModelTraffic["gpt-6-astra"]; ok {
+		t.Fatal("observed gpt-6-astra mapping was reported as not covered")
 	}
-	if !reflect.DeepEqual(report.Details.NotCoveredModels, []string{"gpt-6-astra"}) {
+	if !reflect.DeepEqual(report.Details.EligibleModels[string(QuotaPoolLarge)], []string{"gpt-6-astra"}) {
+		t.Fatalf("eligible models = %v", report.Details.EligibleModels[string(QuotaPoolLarge)])
+	}
+	if len(report.Details.NotCoveredModels) != 0 {
 		t.Fatalf("not-covered models = %v", report.Details.NotCoveredModels)
 	}
 }
@@ -128,7 +154,7 @@ func TestCalculateEstimateUnknownUsageTierStillReportsTraffic(t *testing.T) {
 		result("gpt-5.6-sol", "default", 100, 0, 83),
 	}, DefaultPolicy(), nil)
 	large := report.Pools[string(QuotaPoolLarge)]
-	if large.EligibleTraffic != 183 {
+	if large.EligibleTraffic != 0 {
 		t.Fatalf("traffic = %d", large.EligibleTraffic)
 	}
 	if large.Quota != nil || large.EstimatedRemaining != nil || large.EstimatedUsagePercent != nil {

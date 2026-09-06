@@ -312,6 +312,32 @@ func TestQuotaShowsBilledCostAndKeepsEstimateWhenCostsFail(t *testing.T) {
 	}
 }
 
+func TestQuotaUsesUsageTierForComplimentaryUsedAndCostsAsSupplement(t *testing.T) {
+	usage := &fakeUsage{
+		results: []openaiusage.CompletionUsageResult{
+			{Model: "gpt-5.6-sol", ServiceTier: "default", InputTokens: 10_000, OutputTokens: 5_000},
+			{Model: "gpt-5.6-sol", ServiceTier: openaiusage.IncentivizedServiceTier, InputTokens: 200, OutputTokens: 50},
+		},
+		costs: []openaiusage.CostResult{{Amount: openaiusage.CostAmount{Value: 999.99, Currency: "usd"}}},
+	}
+	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
+	app := testApp(&fakeCodex{current: profile.API}, usage, out, errOut)
+	if code := app.Run(context.Background(), []string{"quota", "--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr=%q", code, errOut.String())
+	}
+	var report openaiusage.QuotaReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("JSON unmarshal returned error: %v; output=%q", err, out.String())
+	}
+	large := report.Pools[string(openaiusage.QuotaPoolLarge)]
+	if large.EligibleTraffic != 250 {
+		t.Fatalf("complimentary used = %d, want 250", large.EligibleTraffic)
+	}
+	if report.BilledCostToday == nil || report.BilledCostToday.Total != 999.99 {
+		t.Fatalf("billed cost = %+v", report.BilledCostToday)
+	}
+}
+
 func TestInvalidCommandReturnsUsageCode(t *testing.T) {
 	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
 	app := testApp(&fakeCodex{current: profile.API}, &fakeUsage{}, out, errOut)

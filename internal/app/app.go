@@ -420,10 +420,12 @@ Use "cx quota --help" for the complimentary-token estimate options.
 func (a *App) quotaHelp() int {
 	const text = `Usage: cx quota [options]
 
-Estimate today's complimentary-token traffic using the OpenAI Organization
-Usage API and show today's actual billed cost from the Costs API. The token
-value is not an official balance API; the OpenAI Usage Dashboard is the
-authoritative place to verify complimentary usage.
+Estimate today's complimentary-token traffic from OpenAI Organization Usage
+API results whose service_tier is exactly "incentivized-tier", and show
+today's actual billed cost from the supplementary Costs API. The token value
+is not an official balance API; the OpenAI Usage Dashboard is the authoritative
+place to verify complimentary usage. Default and other service tiers are not
+included in complimentary used.
 
 Options:
   --verbose                 show model, service-tier, scope, policy, and cost line-item details
